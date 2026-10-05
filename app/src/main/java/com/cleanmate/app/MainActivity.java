@@ -5,7 +5,6 @@ import android.os.Bundle;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.view.Gravity;
-import android.view.View;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -73,7 +72,10 @@ public class MainActivity extends Activity {
         main.addView(title);
         main.addView(subtitle);
 
-        TextView section = text("PHONE CLEANER", 14, Color.rgb(120, 200, 140));
+        TextView section = text(
+                "PHONE CLEANER",
+                14,
+                Color.rgb(120, 200, 140));
         section.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         section.setPadding(0, dp(8), 0, dp(8));
         main.addView(section);
@@ -101,22 +103,28 @@ public class MainActivity extends Activity {
         main.addView(status);
 
         scan.setOnClickListener(v ->
-                status.setText("Scanner ready — we will build the scanner next."));
+                status.setText(
+                        "Scanner ready — we will build the scanner next."));
 
         duplicates.setOnClickListener(v ->
-                status.setText("Duplicate photo scanner coming next."));
+                status.setText(
+                        "Duplicate photo scanner coming next."));
 
         similar.setOnClickListener(v ->
-                status.setText("Similar photo scanner coming next."));
+                status.setText(
+                        "Similar photo scanner coming next."));
 
         oldPhotos.setOnClickListener(v ->
-                status.setText("Old photo scanner coming next."));
+                status.setText(
+                        "Old photo scanner coming next."));
 
         largeFiles.setOnClickListener(v ->
-                status.setText("Large file scanner coming next."));
+                status.setText(
+                        "Large file scanner coming next."));
 
         screenshots.setOnClickListener(v ->
-                status.setText("Screenshot scanner coming next."));
+                status.setText(
+                        "Screenshot scanner coming next."));
 
         scrollView.addView(main);
         setContentView(scrollView);
