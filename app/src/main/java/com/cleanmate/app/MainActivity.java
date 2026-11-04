@@ -1651,18 +1651,17 @@ public class MainActivity extends Activity {
                             Context.STORAGE_STATS_SERVICE
                     );
 
-            StorageStats stats =
-                    manager.queryStatsForPackage(
-                            StorageManager.UUID_DEFAULT,
-                            packageName,
-                            UserHandle.myUserId()
-                    );
+            StorageStats stats = storageStatsManager.queryStatsForPackage(
+        StorageManager.UUID_DEFAULT,
+        packageName,
+        android.os.Process.myUserHandle()
+);
 
-            return stats.getAppBytes()
-                    + stats.getDataBytes()
-                    + stats.getCacheBytes();
+return stats.getAppBytes()
+        + stats.getDataBytes()
+        + stats.getCacheBytes();
 
-        } catch (Exception e) {
+              } catch (Exception e) {
             return -1L;
         }
     }
@@ -1960,27 +1959,25 @@ public class MainActivity extends Activity {
     // ------------------------------------------------
 
     private void openBatterySettings() {
-        Intent i = new Intent(
-                Settings.ACTION_BATTERY_SAVER_SETTINGS
-        );
+    Intent i = new Intent(
+            Settings.ACTION_BATTERY_SAVER_SETTINGS
+    );
 
-        if (i.resolveActivity(getPackageManager()) == null) {
-            i = new Intent(
-                    Settings.ACTION_POWER_USAGE_SUMMARY
-            );
-        }
-
-        try {
-            startActivity(i);
-
-        } catch (Exception e) {
-            Toast.makeText(
-                    this,
-                    "Battery settings are not available on this device.",
-                    Toast.LENGTH_SHORT
-            ).show();
-        }
+    if (i.resolveActivity(getPackageManager()) == null) {
+        i = new Intent(Settings.ACTION_SETTINGS);
     }
+
+    try {
+        startActivity(i);
+
+    } catch (Exception e) {
+        Toast.makeText(
+                this,
+                "Battery settings are not available on this device.",
+                Toast.LENGTH_SHORT
+        ).show();
+    }
+}
 
     // ------------------------------------------------
     // HELPERS
