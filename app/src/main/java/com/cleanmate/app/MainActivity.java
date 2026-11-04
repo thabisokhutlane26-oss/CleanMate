@@ -165,6 +165,13 @@ public class MainActivity extends Activity {
         parent.addView(v, lp(1, dp(height)));
     }
 
+    private void spaceGap(LinearLayout parent, int minHeight) {
+        View spacer = new View(this);
+        LinearLayout.LayoutParams params =
+                new LinearLayout.LayoutParams(-1, dp(minHeight), 1f);
+        parent.addView(spacer, params);
+    }
+
     private void hgap(LinearLayout parent, int width) {
         View v = new View(this);
         parent.addView(v, lp(dp(width), 1));
@@ -172,7 +179,7 @@ public class MainActivity extends Activity {
 
     private LinearLayout card() {
         LinearLayout c = vertical();
-        c.setPadding(dp(13), dp(11), dp(13), dp(11));
+        c.setPadding(dp(13), dp(8), dp(13), dp(8));
         c.setBackground(panelBackground(CARD, 18));
         return c;
     }
@@ -197,7 +204,7 @@ public class MainActivity extends Activity {
         root.setBackgroundColor(BG);
 
         page = vertical();
-        page.setPadding(dp(14), dp(9), dp(14), dp(8));
+        page.setPadding(dp(14), dp(7), dp(14), dp(6));
 
         if (scrollable) {
             ScrollView scroll = new ScrollView(this);
@@ -250,16 +257,16 @@ public class MainActivity extends Activity {
         page.addView(header);
     }
 
-    // Compact, non-scrolling home dashboard.
+    // Compact dashboard. Weighted spacers distribute sections through the screen.
     private void showDashboard() {
         currentScreen = "HOME";
         setPage(false);
         addHeader(true);
 
-        gap(page, 8);
+        spaceGap(page, 2);
 
         LinearLayout welcome = horizontal();
-        welcome.setPadding(dp(12), dp(8), dp(12), dp(8));
+        welcome.setPadding(dp(12), dp(6), dp(12), dp(6));
         welcome.setBackground(panelBackground(
                 Color.rgb(13, 54, 39),
                 16
@@ -291,13 +298,13 @@ public class MainActivity extends Activity {
         welcome.addView(text("✦  ♻", 23, GREEN, true));
         page.addView(welcome);
 
-        gap(page, 7);
+        spaceGap(page, 2);
         addCompactStorageCard();
 
-        gap(page, 7);
+        spaceGap(page, 2);
 
         LinearLayout scanRow = horizontal();
-        scanRow.setPadding(dp(12), dp(7), dp(12), dp(7));
+        scanRow.setPadding(dp(12), dp(6), dp(12), dp(6));
         scanRow.setBackground(panelBackground(CARD, 15));
 
         LinearLayout scanCopy = vertical();
@@ -319,10 +326,10 @@ public class MainActivity extends Activity {
         scanButton.setOnClickListener(v -> startScan());
         page.addView(scanRow);
 
-        gap(page, 6);
+        spaceGap(page, 2);
 
         LinearLayout summary = horizontal();
-        summary.setPadding(dp(10), dp(6), dp(10), dp(6));
+        summary.setPadding(dp(10), dp(5), dp(10), dp(5));
         summary.setBackground(solidBackground(
                 Color.rgb(11, 43, 33),
                 12
@@ -346,7 +353,7 @@ public class MainActivity extends Activity {
         summary.addView(scanSummary);
         page.addView(summary);
 
-        gap(page, 5);
+        spaceGap(page, 2);
 
         LinearLayout toolTitle = horizontal();
         toolTitle.addView(
@@ -366,7 +373,7 @@ public class MainActivity extends Activity {
 
         addCompactTools();
 
-        gap(page, 6);
+        spaceGap(page, 2);
         page.addView(text("POWER TOOLS", 10, GREEN, true));
         gap(page, 4);
 
@@ -378,7 +385,7 @@ public class MainActivity extends Activity {
         addPowerButton(power, "ϟ  Battery", () -> openBatterySettings());
         page.addView(power);
 
-        gap(page, 4);
+        spaceGap(page, 2);
 
         dashboardStatus = text(
                 scanCompleted
@@ -391,9 +398,10 @@ public class MainActivity extends Activity {
         dashboardStatus.setGravity(Gravity.CENTER);
         page.addView(dashboardStatus);
     }
-            private void addCompactStorageCard() {
+
+    private void addCompactStorageCard() {
         LinearLayout storage = horizontal();
-        storage.setPadding(dp(10), dp(7), dp(10), dp(7));
+        storage.setPadding(dp(10), dp(6), dp(10), dp(6));
         storage.setBackground(panelBackground(CARD, 17));
 
         long total = 0;
@@ -835,7 +843,7 @@ public class MainActivity extends Activity {
         }
     }
 
-          private void openCategory(String category) {
+    private void openCategory(String category) {
         if (!scanCompleted) {
             Toast.makeText(
                     this,
@@ -1054,9 +1062,7 @@ public class MainActivity extends Activity {
                 (b, checked) -> f.selected = checked
         );
 
-        row.addView(check);
-
-        if ("IMAGE".equals(f.type)) {
+        row.addView(check);        if ("IMAGE".equals(f.type)) {
             ImageView image = new ImageView(this);
             image.setScaleType(ImageView.ScaleType.CENTER_CROP);
             image.setImageURI(f.uri);
@@ -1274,8 +1280,19 @@ public class MainActivity extends Activity {
             showAppStorage();
 
         } else if (requestCode == REQUEST_UNINSTALL) {
-            uninstallIndex++;
-            launchNextUninstall();
+            if (resultCode == RESULT_OK) {
+                uninstallIndex++;
+                launchNextUninstall();
+            } else {
+                uninstallQueue.clear();
+                uninstallIndex = 0;
+                Toast.makeText(
+                        this,
+                        "Uninstall cancelled. Remaining apps were not processed.",
+                        Toast.LENGTH_SHORT
+                ).show();
+                loadInstalledApps();
+            }
         }
     }
 
@@ -1303,8 +1320,8 @@ public class MainActivity extends Activity {
                 return "Files";
         }
     }
-   
-                // ------------------------------------------------
+
+    // ------------------------------------------------
     // APP STORAGE MANAGER
     // ------------------------------------------------
 
@@ -1641,30 +1658,30 @@ public class MainActivity extends Activity {
     }
 
     private long queryAppSize(String packageName) {
-    if (Build.VERSION.SDK_INT < 26 || !hasUsageAccess()) {
-        return -1L;
+        if (Build.VERSION.SDK_INT < 26 || !hasUsageAccess()) {
+            return -1L;
+        }
+
+        try {
+            StorageStatsManager manager =
+                    (StorageStatsManager) getSystemService(
+                            Context.STORAGE_STATS_SERVICE
+                    );
+
+            StorageStats stats = manager.queryStatsForPackage(
+                    StorageManager.UUID_DEFAULT,
+                    packageName,
+                    android.os.Process.myUserHandle()
+            );
+
+            return stats.getAppBytes()
+                    + stats.getDataBytes()
+                    + stats.getCacheBytes();
+
+        } catch (Exception e) {
+            return -1L;
+        }
     }
-
-    try {
-        StorageStatsManager manager =
-                (StorageStatsManager) getSystemService(
-                        Context.STORAGE_STATS_SERVICE
-                );
-
-        StorageStats stats = manager.queryStatsForPackage(
-                StorageManager.UUID_DEFAULT,
-                packageName,
-                android.os.Process.myUserHandle()
-        );
-
-        return stats.getAppBytes()
-                + stats.getDataBytes()
-                + stats.getCacheBytes();
-
-    } catch (Exception e) {
-        return -1L;
-    }
-}
 
     private void renderAppRows() {
         if (!currentScreen.equals("APPS")) {
@@ -1959,25 +1976,25 @@ public class MainActivity extends Activity {
     // ------------------------------------------------
 
     private void openBatterySettings() {
-    Intent i = new Intent(
-            Settings.ACTION_BATTERY_SAVER_SETTINGS
-    );
+        Intent i = new Intent(
+                Settings.ACTION_BATTERY_SAVER_SETTINGS
+        );
 
-    if (i.resolveActivity(getPackageManager()) == null) {
-        i = new Intent(Settings.ACTION_SETTINGS);
+        if (i.resolveActivity(getPackageManager()) == null) {
+            i = new Intent(Settings.ACTION_SETTINGS);
+        }
+
+        try {
+            startActivity(i);
+
+        } catch (Exception e) {
+            Toast.makeText(
+                    this,
+                    "Battery settings are not available on this device.",
+                    Toast.LENGTH_SHORT
+            ).show();
+        }
     }
-
-    try {
-        startActivity(i);
-
-    } catch (Exception e) {
-        Toast.makeText(
-                this,
-                "Battery settings are not available on this device.",
-                Toast.LENGTH_SHORT
-        ).show();
-    }
-}
 
     // ------------------------------------------------
     // HELPERS
