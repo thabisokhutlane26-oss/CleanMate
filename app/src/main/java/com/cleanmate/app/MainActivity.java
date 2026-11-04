@@ -282,7 +282,7 @@ public class MainActivity extends Activity {
 
     private void showDashboard() {
         currentScreen = "HOME";
-        setPage(false);
+        setPage(true);
         addHeader(true);
 
         gap(page, 8);
@@ -429,12 +429,48 @@ public class MainActivity extends Activity {
     }
 
     private void addPowerButton(LinearLayout parent, String label, Runnable action) {
-        Button b = button(label, false);
-        b.setTextSize(9);
-        b.setMinHeight(dp(38));
-        parent.addView(b, new LinearLayout.LayoutParams(0, dp(40), 1));
-        b.setOnClickListener(v -> action.run());
+    LinearLayout tile = new LinearLayout(this);
+    tile.setOrientation(LinearLayout.VERTICAL);
+    tile.setGravity(Gravity.CENTER);
+    tile.setPadding(dp(4), dp(8), dp(4), dp(8));
+    tile.setBackground(panelBackground(CARD_ALT, 15));
+
+    String icon = "▦";
+    String title = label;
+
+    if (label.contains("Storage")) {
+        icon = "▦";
+        title = "App Storage";
+    } else if (label.contains("Locker")) {
+        icon = "⌑";
+        title = "App Locker";
+    } else if (label.contains("Battery")) {
+        icon = "ϟ";
+        title = "Battery";
     }
+
+    TextView iconView = new TextView(this);
+    iconView.setText(icon);
+    iconView.setTextSize(29);
+    iconView.setGravity(Gravity.CENTER);
+    iconView.setTextColor(GREEN);
+
+    TextView titleView = new TextView(this);
+    titleView.setText(title);
+    titleView.setTextSize(11);
+    titleView.setGravity(Gravity.CENTER);
+    titleView.setTextColor(Color.WHITE);
+
+    tile.addView(iconView);
+    tile.addView(titleView);
+
+    LinearLayout.LayoutParams params =
+            new LinearLayout.LayoutParams(0, dp(82), 1);
+    params.setMargins(dp(3), 0, dp(3), 0);
+
+    parent.addView(tile, params);
+    tile.setOnClickListener(v -> action.run());
+}
 
     private void addCompactTools() {
         String[][] tools = {
