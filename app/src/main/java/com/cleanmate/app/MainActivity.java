@@ -1,4 +1,3 @@
-
 package com.cleanmate.app;
 
 import android.Manifest;
@@ -28,7 +27,6 @@ import android.widget.CheckBox;
 import android.widget.GridLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
-import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -353,7 +351,18 @@ public class MainActivity extends Activity {
                 )
         );
 
+        Button shareButton =
+                styledButton("↗ Share");
+
+        header.addView(shareButton);
+
+        addHorizontalSpace(header, 8);
+
         header.addView(pill("● READY"));
+
+        shareButton.setOnClickListener(
+                v -> shareApp()
+        );
 
         content.addView(header);
 
@@ -493,20 +502,24 @@ public class MainActivity extends Activity {
         content.addView(banner);
     }
 
+    // ------------------------------------------------
+    // STORAGE GAUGE
+    // ------------------------------------------------
+
     private void addStorageCard() {
 
         LinearLayout storage = card();
 
         storage.addView(
                 makeText(
-                        "PHONE STORAGE",
+                        "INTERNAL STORAGE",
                         13,
                         MUTED,
                         true
                 )
         );
 
-        addSpace(storage, 10);
+        addSpace(storage, 8);
 
         long total = 0;
         long available = 0;
@@ -522,65 +535,146 @@ public class MainActivity extends Activity {
         } catch (Exception ignored) {
         }
 
-        long used = Math.max(
-                0,
-                total - available
+        long used = Math.max(0, total - available);
+
+        StorageGaugeView gauge = new StorageGaugeView(
+                this,
+                used,
+                total,
+                GREEN,
+                CARD_LIGHT,
+                WHITE,
+                MUTED
         );
 
-        storage.addView(
+        LinearLayout gaugeContainer = horizontal();
+        gaugeContainer.setGravity(Gravity.CENTER);
+
+        gaugeContainer.addView(
+                gauge,
+                params(dp(170), dp(170))
+        );
+
+        storage.addView(gaugeContainer);
+
+        addSpace(storage, 12);
+
+        LinearLayout stats = horizontal();
+
+        LinearLayout usedColumn = vertical();
+        usedColumn.setGravity(Gravity.CENTER);
+
+        usedColumn.addView(
                 makeText(
-                        formatSize(used) + " used",
-                        23,
+                        formatSize(used),
+                        17,
                         WHITE,
                         true
                 )
         );
 
-        addSpace(storage, 5);
-
-        storage.addView(
+        usedColumn.addView(
                 makeText(
-                        formatSize(available) + " available",
-                        12,
+                        "USED",
+                        10,
                         MUTED,
-                        false
+                        true
                 )
         );
 
-        addSpace(storage, 12);
+        LinearLayout freeColumn = vertical();
+        freeColumn.setGravity(Gravity.CENTER);
 
-        ProgressBar progress =
-                new ProgressBar(
-                        this,
-                        null,
-                        android.R.attr.progressBarStyleHorizontal
-                );
-
-        progress.setMax(100);
-
-        int percentage = total > 0
-                ? (int) ((used * 100L) / total)
-                : 0;
-
-        progress.setProgress(
-                Math.min(100, percentage)
+        freeColumn.addView(
+                makeText(
+                        formatSize(available),
+                        17,
+                        GREEN,
+                        true
+                )
         );
 
-        progress.setProgressTintList(
-                ColorStateList.valueOf(GREEN)
+        freeColumn.addView(
+                makeText(
+                        "AVAILABLE",
+                        10,
+                        MUTED,
+                        true
+                )
         );
 
-        progress.setProgressBackgroundTintList(
-                ColorStateList.valueOf(CARD_LIGHT)
+        stats.addView(
+                usedColumn,
+                new LinearLayout.LayoutParams(
+                        0,
+                        -2,
+                        1
+                )
         );
 
-        storage.addView(
-                progress,
-                params(-1, dp(8))
+        stats.addView(
+                freeColumn,
+                new LinearLayout.LayoutParams(
+                        0,
+                        -2,
+                        1
+                )
         );
+
+        storage.addView(stats);
+
+        addSpace(storage, 10);
+
+        TextView note = makeText(
+                "Storage information reported by Android",
+                10,
+                MUTED,
+                false
+        );
+
+        note.setGravity(Gravity.CENTER);
+
+        storage.addView(note);
 
         content.addView(storage);
     }
+
+    // ------------------------------------------------
+    // SHARE APP
+    // ------------------------------------------------
+
+    private void shareApp() {
+
+        String message =
+                "Check out DroidTidy — Phone Cleaner & Storage Manager.\n\n"
+                + "Project and download updates:\n"
+                + "https://github.com/thabisokhutlane26-oss/CleanMate";
+
+        Intent intent = new Intent(Intent.ACTION_SEND);
+
+        intent.setType("text/plain");
+
+        intent.putExtra(
+                Intent.EXTRA_SUBJECT,
+                "DroidTidy"
+        );
+
+        intent.putExtra(
+                Intent.EXTRA_TEXT,
+                message
+        );
+
+        startActivity(
+                Intent.createChooser(
+                        intent,
+                        "Share DroidTidy"
+                )
+        );
+    }
+
+    // ------------------------------------------------
+    // SCAN CARD
+    // ------------------------------------------------
 
     private void addScanCard() {
 
@@ -1756,7 +1850,6 @@ public class MainActivity extends Activity {
 
             mediaPlayer.setOnCompletionListener(
                     player -> {
-
                         stopAudio();
                     }
             );
