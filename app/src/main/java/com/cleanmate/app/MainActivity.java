@@ -1641,30 +1641,30 @@ public class MainActivity extends Activity {
     }
 
     private long queryAppSize(String packageName) {
-        if (Build.VERSION.SDK_INT < 26 || !hasUsageAccess()) {
-            return -1L;
-        }
-
-        try {
-            StorageStatsManager manager =
-                    (StorageStatsManager) getSystemService(
-                            Context.STORAGE_STATS_SERVICE
-                    );
-
-            StorageStats stats = storageStatsManager.queryStatsForPackage(
-        StorageManager.UUID_DEFAULT,
-        packageName,
-        android.os.Process.myUserHandle()
-);
-
-return stats.getAppBytes()
-        + stats.getDataBytes()
-        + stats.getCacheBytes();
-
-              } catch (Exception e) {
-            return -1L;
-        }
+    if (Build.VERSION.SDK_INT < 26 || !hasUsageAccess()) {
+        return -1L;
     }
+
+    try {
+        StorageStatsManager manager =
+                (StorageStatsManager) getSystemService(
+                        Context.STORAGE_STATS_SERVICE
+                );
+
+        StorageStats stats = manager.queryStatsForPackage(
+                StorageManager.UUID_DEFAULT,
+                packageName,
+                android.os.Process.myUserHandle()
+        );
+
+        return stats.getAppBytes()
+                + stats.getDataBytes()
+                + stats.getCacheBytes();
+
+    } catch (Exception e) {
+        return -1L;
+    }
+}
 
     private void renderAppRows() {
         if (!currentScreen.equals("APPS")) {
