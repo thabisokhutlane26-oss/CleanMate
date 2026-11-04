@@ -2,8 +2,15 @@ package com.cleanmate.app;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.AppOpsManager;
 import android.app.PendingIntent;
+import android.app.usage.StorageStats;
+import android.app.usage.StorageStatsManager;
+import android.app.usage.UsageStats;
+import android.app.usage.UsageStatsManager;
+import android.content.Context;
 import android.content.Intent;
+import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
 import android.database.Cursor;
@@ -18,12 +25,16 @@ import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.StatFs;
+import android.os.storage.StorageManager;
+import android.os.UserHandle;
 import android.provider.MediaStore;
+import android.provider.Settings;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.CheckBox;
+import android.widget.EditText;
 import android.widget.GridLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -32,6 +43,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
@@ -41,485 +53,348 @@ import java.util.concurrent.Executors;
 
 public class MainActivity extends Activity {
 
-    private static final int REQUEST_STORAGE = 100;
+    private static final int REQUEST_MEDIA = 100;
     private static final int REQUEST_DELETE = 200;
+    private static final int REQUEST_USAGE = 300;
+    private static final int REQUEST_UNINSTALL = 400;
 
-    private static final long LARGE_FILE_SIZE =
-            50L * 1024L * 1024L;
+    private static final long LARGE_FILE_SIZE = 50L * 1024L * 1024L;
+    private static final long OLD_FILE_AGE = 365L * 24L * 60L * 60L;
 
-    private static final long OLD_FILE_AGE =
-            365L * 24L * 60L * 60L;
-
-    private static final int BG =
-            Color.rgb(10, 16, 24);
-
-    private static final int CARD =
-            Color.rgb(20, 29, 40);
-
-    private static final int CARD_LIGHT =
-            Color.rgb(29, 41, 54);
-
-    private static final int GREEN =
-            Color.rgb(42, 220, 130);
-
-    private static final int WHITE =
-            Color.WHITE;
-
-    private static final int MUTED =
-            Color.rgb(155, 169, 184);
+    private static final int BG = Color.rgb(7, 17, 18);
+    private static final int CARD = Color.rgb(17, 35, 34);
+    private static final int CARD_ALT = Color.rgb(22, 48, 43);
+    private static final int GREEN = Color.rgb(0, 255, 136);
+    private static final int GREEN_DARK = Color.rgb(13, 112, 75);
+    private static final int WHITE = Color.rgb(239, 250, 245);
+    private static final int MUTED = Color.rgb(145, 173, 163);
+    private static final int BORDER = Color.rgb(40, 92, 75);
 
     private LinearLayout root;
-    private LinearLayout content;
-
-    private TextView status;
+    private LinearLayout page;
     private TextView scanSummary;
-
+    private TextView dashboardStatus;
     private Button scanButton;
 
-    private boolean listMode = false;
     private boolean scanCompleted = false;
+    private boolean listMode = false;
+    private String currentCategory = "HOME";
+    private String currentScreen = "HOME";
 
-    private final List<FileInfo> allFiles =
-            new ArrayList<>();
+    private final List<FileInfo> allFiles = new ArrayList<>();
+    private final List<FileInfo> visibleFiles = new ArrayList<>();
+    private final List<AppInfo> installedApps = new ArrayList<>();
 
-    private final List<FileInfo> visibleFiles =
-            new ArrayList<>();
-
-    private final Handler handler =
-            new Handler(Looper.getMainLooper());
-
-    private final ExecutorService executor =
-            Executors.newSingleThreadExecutor();
+    private final Handler handler = new Handler(Looper.getMainLooper());
+    private final ExecutorService executor = Executors.newSingleThreadExecutor();
 
     private MediaPlayer mediaPlayer;
-    private Button currentlyPlayingButton;
-
-    private String currentCategory = "HOME";
+    private Button playingButton;
+    private int uninstallIndex = 0;
+    private final List<String> uninstallQueue = new ArrayList<>();
 
     private int dp(float value) {
-        return (int) (
-                value *
-                getResources().getDisplayMetrics().density
-                + 0.5f
-        );
+        return (int) (value * getResources().getDisplayMetrics().density + 0.5f);
     }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-
         getWindow().setStatusBarColor(BG);
         getWindow().setNavigationBarColor(BG);
-
-        buildDashboard();
-    }
-
-    private GradientDrawable shape(
-            int color,
-            int radius) {
-
-        GradientDrawable drawable =
-                new GradientDrawable();
-
-        drawable.setColor(color);
-        drawable.setCornerRadius(dp(radius));
-
-        return drawable;
-    }
-
-    private TextView makeText(
-            String value,
-            float size,
-            int color,
-            boolean bold) {
-
-        TextView view = new TextView(this);
-
-        view.setText(value);
-        view.setTextSize(size);
-        view.setTextColor(color);
-
-        if (bold) {
-            view.setTypeface(
-                    Typeface.DEFAULT,
-                    Typeface.BOLD
-            );
+        if (Build.VERSION.SDK_INT >= 29) {
+            getWindow().setNavigationBarDividerColor(BORDER);
         }
+        showDashboard();
+    }
 
-        return view;
+    private GradientDrawable panelBackground(int fill, int radius) {
+        GradientDrawable d = new GradientDrawable(
+                GradientDrawable.Orientation.TL_BR,
+                new int[]{
+                        Color.argb(245, Color.red(fill), Color.green(fill), Color.blue(fill)),
+                        Color.argb(225, 8, 35, 29)
+                }
+        );
+        d.setCornerRadius(dp(radius));
+        d.setStroke(dp(1), BORDER);
+        return d;
+    }
+
+    private GradientDrawable solidBackground(int fill, int radius) {
+        GradientDrawable d = new GradientDrawable();
+        d.setColor(fill);
+        d.setCornerRadius(dp(radius));
+        d.setStroke(dp(1), BORDER);
+        return d;
+    }
+
+    private TextView text(String value, float size, int color, boolean bold) {
+        TextView t = new TextView(this);
+        t.setText(value);
+        t.setTextSize(size);
+        t.setTextColor(color);
+        t.setIncludeFontPadding(true);
+        if (bold) {
+            t.setTypeface(Typeface.create("sans-serif", Typeface.BOLD));
+        } else {
+            t.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL));
+        }
+        return t;
     }
 
     private LinearLayout vertical() {
-        LinearLayout layout =
-                new LinearLayout(this);
-
-        layout.setOrientation(
-                LinearLayout.VERTICAL
-        );
-
-        return layout;
+        LinearLayout l = new LinearLayout(this);
+        l.setOrientation(LinearLayout.VERTICAL);
+        return l;
     }
 
     private LinearLayout horizontal() {
-        LinearLayout layout =
-                new LinearLayout(this);
-
-        layout.setOrientation(
-                LinearLayout.HORIZONTAL
-        );
-
-        layout.setGravity(
-                Gravity.CENTER_VERTICAL
-        );
-
-        return layout;
+        LinearLayout l = new LinearLayout(this);
+        l.setOrientation(LinearLayout.HORIZONTAL);
+        l.setGravity(Gravity.CENTER_VERTICAL);
+        return l;
     }
 
-    private LinearLayout.LayoutParams params(
-            int width,
-            int height) {
-
-        return new LinearLayout.LayoutParams(
-                width,
-                height
-        );
+    private LinearLayout.LayoutParams lp(int w, int h) {
+        return new LinearLayout.LayoutParams(w, h);
     }
 
-    private void addSpace(
-            LinearLayout parent,
-            int height) {
-
-        View space = new View(this);
-
-        parent.addView(
-                space,
-                params(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        dp(height)
-                )
-        );
+    private void gap(LinearLayout parent, int height) {
+        View v = new View(this);
+        parent.addView(v, lp(1, dp(height)));
     }
 
-    private void addHorizontalSpace(
-            LinearLayout parent,
-            int width) {
-
-        View space = new View(this);
-
-        parent.addView(
-                space,
-                params(dp(width), 1)
-        );
-    }
-
-    private TextView sectionTitle(String title) {
-
-        TextView view =
-                makeText(title, 15, WHITE, true);
-
-        view.setPadding(
-                0, dp(10), 0, dp(10)
-        );
-
-        return view;
-    }
-
-    private TextView pill(String label) {
-
-        TextView view =
-                makeText(label, 12, GREEN, true);
-
-        view.setPadding(
-                dp(12),
-                dp(7),
-                dp(12),
-                dp(7)
-        );
-
-        view.setBackground(
-                shape(Color.rgb(24, 58, 47), 30)
-        );
-
-        return view;
-    }
-
-    private Button styledButton(String label) {
-
-        Button button = new Button(this);
-
-        button.setText(label);
-        button.setTextColor(WHITE);
-        button.setTextSize(13);
-        button.setAllCaps(false);
-
-        button.setPadding(
-                dp(8), 0, dp(8), 0
-        );
-
-        button.setBackground(
-                shape(CARD_LIGHT, 14)
-        );
-
-        return button;
+    private void hgap(LinearLayout parent, int width) {
+        View v = new View(this);
+        parent.addView(v, lp(dp(width), 1));
     }
 
     private LinearLayout card() {
-
-        LinearLayout layout = vertical();
-
-        layout.setPadding(
-                dp(16),
-                dp(16),
-                dp(16),
-                dp(16)
-        );
-
-        layout.setBackground(
-                shape(CARD, 20)
-        );
-
-        return layout;
+        LinearLayout c = vertical();
+        c.setPadding(dp(13), dp(11), dp(13), dp(11));
+        c.setBackground(panelBackground(CARD, 18));
+        return c;
     }
 
-    // ------------------------------------------------
-    // DASHBOARD
-    // ------------------------------------------------
+    private Button button(String label, boolean primary) {
+        Button b = new Button(this);
+        b.setText(label);
+        b.setTextSize(12);
+        b.setAllCaps(false);
+        b.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        b.setTextColor(primary ? Color.rgb(3, 30, 19) : WHITE);
+        b.setPadding(dp(9), 0, dp(9), 0);
+        b.setMinHeight(dp(40));
+        b.setBackground(solidBackground(primary ? GREEN : CARD_ALT, 13));
+        return b;
+    }
 
-    private void buildDashboard() {
+    private void setPage(boolean scrollable) {
+        stopAudio();
 
         root = vertical();
         root.setBackgroundColor(BG);
 
-        ScrollView scroll =
-                new ScrollView(this);
+        page = vertical();
+        page.setPadding(dp(14), dp(9), dp(14), dp(8));
 
-        scroll.setFillViewport(true);
-
-        content = vertical();
-
-        content.setPadding(
-                dp(18),
-                dp(22),
-                dp(18),
-                dp(28)
-        );
-
-        scroll.addView(content);
-        root.addView(scroll);
+        if (scrollable) {
+            ScrollView scroll = new ScrollView(this);
+            scroll.setFillViewport(true);
+            scroll.setClipToPadding(false);
+            scroll.addView(page);
+            root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+        } else {
+            root.addView(page, new LinearLayout.LayoutParams(-1, 0, 1));
+        }
 
         setContentView(root);
-
-        showHome();
     }
 
-    private void showHome() {
-
-        stopAudio();
-
-        currentCategory = "HOME";
-
-        content.removeAllViews();
-
+    private void addHeader(boolean showShare) {
         LinearLayout header = horizontal();
 
         LinearLayout brand = vertical();
+        brand.addView(text("DroidTidy", 24, WHITE, true));
+        brand.addView(text(
+                "PHONE CLEANER  •  STORAGE MANAGER",
+                8.5f,
+                MUTED,
+                true
+        ));
 
-        brand.addView(
-                makeText(
-                        "DroidTidy",
-                        29,
-                        WHITE,
-                        true
-                )
-        );
+        header.addView(brand, new LinearLayout.LayoutParams(0, -2, 1));
 
-        brand.addView(
-                makeText(
-                        "PHONE CLEANER  •  STORAGE MANAGER",
-                        10,
-                        MUTED,
-                        true
-                )
-        );
+        if (showShare) {
+            Button share = button("↗ Share", false);
+            header.addView(share, lp(dp(72), dp(36)));
+            hgap(header, 6);
 
-        header.addView(
-                brand,
-                new LinearLayout.LayoutParams(
-                        0,
-                        -2,
-                        1
-                )
-        );
+            TextView ready = text("● READY", 9, GREEN, true);
+            ready.setGravity(Gravity.CENTER);
+            ready.setPadding(dp(8), dp(7), dp(8), dp(7));
+            ready.setBackground(solidBackground(
+                    Color.rgb(14, 53, 39),
+                    20
+            ));
+            header.addView(ready);
 
-        Button shareButton =
-                styledButton("↗ Share");
+            share.setOnClickListener(v -> shareApp());
+        } else {
+            Button back = button("‹ Back", false);
+            header.addView(back);
+            back.setOnClickListener(v -> showDashboard());
+        }
 
-        header.addView(shareButton);
+        page.addView(header);
+    }
 
-        addHorizontalSpace(header, 8);
+    // Compact, non-scrolling home dashboard.
+    private void showDashboard() {
+        currentScreen = "HOME";
+        setPage(false);
+        addHeader(true);
 
-        header.addView(pill("● READY"));
+        gap(page, 8);
 
-        shareButton.setOnClickListener(
-                v -> shareApp()
-        );
+        LinearLayout welcome = horizontal();
+        welcome.setPadding(dp(12), dp(8), dp(12), dp(8));
+        welcome.setBackground(panelBackground(
+                Color.rgb(13, 54, 39),
+                16
+        ));
 
-        content.addView(header);
+        LinearLayout welcomeText = vertical();
+        welcomeText.addView(text(
+                "A FRESHER PHONE STARTS HERE",
+                10,
+                GREEN,
+                true
+        ));
 
-        addSpace(content, 18);
+        gap(welcomeText, 3);
 
-        addCleaningBanner();
-
-        addSpace(content, 16);
-
-        addStorageCard();
-
-        addSpace(content, 18);
-
-        addScanCard();
-
-        addSpace(content, 18);
-
-        LinearLayout summaryCard = card();
-
-        summaryCard.addView(
-                makeText(
-                        "SMART CLEANUP",
-                        13,
-                        GREEN,
-                        true
-                )
-        );
-
-        addSpace(summaryCard, 8);
-
-        scanSummary = makeText(
-                scanCompleted
-                        ? "Your latest scan is ready."
-                        : "Scan your phone to discover files you can review.",
-                14,
+        TextView subtitle = text(
+                "Clean up unwanted files. Keep what matters.",
+                11,
                 WHITE,
                 false
         );
+        subtitle.setMaxLines(2);
+        welcomeText.addView(subtitle);
 
-        summaryCard.addView(scanSummary);
+        welcome.addView(
+                welcomeText,
+                new LinearLayout.LayoutParams(0, -2, 1)
+        );
+        welcome.addView(text("✦  ♻", 23, GREEN, true));
+        page.addView(welcome);
 
-        content.addView(summaryCard);
+        gap(page, 7);
+        addCompactStorageCard();
 
-        addSpace(content, 18);
+        gap(page, 7);
 
-        LinearLayout toolsHeader = horizontal();
+        LinearLayout scanRow = horizontal();
+        scanRow.setPadding(dp(12), dp(7), dp(12), dp(7));
+        scanRow.setBackground(panelBackground(CARD, 15));
 
-        toolsHeader.addView(
-                sectionTitle("CLEANING TOOLS"),
-                new LinearLayout.LayoutParams(
-                        0, -2, 1
-                )
+        LinearLayout scanCopy = vertical();
+        scanCopy.addView(text("SMART PHONE SCAN", 11, WHITE, true));
+        scanCopy.addView(text(
+                "Find files taking up space",
+                9,
+                MUTED,
+                false
+        ));
+
+        scanRow.addView(
+                scanCopy,
+                new LinearLayout.LayoutParams(0, -2, 1)
         );
 
-        Button gridButton =
-                styledButton(
-                        listMode ? "Grid" : "List"
-                );
+        scanButton = button("✦  SCAN NOW", true);
+        scanRow.addView(scanButton, lp(dp(118), dp(43)));
+        scanButton.setOnClickListener(v -> startScan());
+        page.addView(scanRow);
 
-        toolsHeader.addView(gridButton);
+        gap(page, 6);
 
-        content.addView(toolsHeader);
+        LinearLayout summary = horizontal();
+        summary.setPadding(dp(10), dp(6), dp(10), dp(6));
+        summary.setBackground(solidBackground(
+                Color.rgb(11, 43, 33),
+                12
+        ));
 
-        gridButton.setOnClickListener(v -> {
+        summary.addView(text("SCAN", 9, GREEN, true));
+        hgap(summary, 8);
+
+        scanSummary = text(
+                scanCompleted
+                        ? "Scan complete · " + allFiles.size() + " files found"
+                        : "Ready to scan accessible media",
+                9.5f,
+                WHITE,
+                false
+        );
+        scanSummary.setMaxLines(1);
+        scanSummary.setEllipsize(
+                android.text.TextUtils.TruncateAt.END
+        );
+        summary.addView(scanSummary);
+        page.addView(summary);
+
+        gap(page, 5);
+
+        LinearLayout toolTitle = horizontal();
+        toolTitle.addView(
+                text("CLEANING TOOLS", 11, WHITE, true),
+                new LinearLayout.LayoutParams(0, -2, 1)
+        );
+
+        Button viewMode = button(listMode ? "Grid" : "List", false);
+        viewMode.setMinHeight(dp(30));
+        toolTitle.addView(viewMode, lp(dp(58), dp(30)));
+        page.addView(toolTitle);
+
+        viewMode.setOnClickListener(v -> {
             listMode = !listMode;
-            showHome();
+            showDashboard();
         });
 
-        addTools();
+        addCompactTools();
 
-        addSpace(content, 18);
+        gap(page, 6);
+        page.addView(text("POWER TOOLS", 10, GREEN, true));
+        gap(page, 4);
 
-        status = makeText(
+        LinearLayout power = horizontal();
+        addPowerButton(power, "▦  App Storage", () -> showAppStorage());
+        hgap(power, 5);
+        addPowerButton(power, "⌑  App Locker", () -> showAppLocker());
+        hgap(power, 5);
+        addPowerButton(power, "ϟ  Battery", () -> openBatterySettings());
+        page.addView(power);
+
+        gap(page, 4);
+
+        dashboardStatus = text(
                 scanCompleted
-                        ? "Last scan completed."
-                        : "Ready when you are.",
-                12,
+                        ? "Scan completed successfully."
+                        : "Your files stay yours. Review before deleting.",
+                8.5f,
                 MUTED,
                 false
         );
-
-        status.setGravity(Gravity.CENTER);
-
-        content.addView(status);
+        dashboardStatus.setGravity(Gravity.CENTER);
+        page.addView(dashboardStatus);
     }
-
-    private void addCleaningBanner() {
-
-        LinearLayout banner = vertical();
-
-        banner.setPadding(
-                dp(18),
-                dp(18),
-                dp(18),
-                dp(18)
-        );
-
-        banner.setBackground(
-                shape(Color.rgb(24, 55, 47), 22)
-        );
-
-        banner.addView(
-                makeText(
-                        "A FRESHER PHONE STARTS HERE",
-                        12,
-                        GREEN,
-                        true
-                )
-        );
-
-        addSpace(banner, 12);
-
-        TextView illustration = makeText(
-                "🧹     ✨     🗑️     ♻️",
-                31,
-                WHITE,
-                true
-        );
-
-        illustration.setGravity(Gravity.CENTER);
-
-        banner.addView(illustration);
-
-        addSpace(banner, 10);
-
-        TextView message = makeText(
-                "Clean up unwanted files. Keep the things that matter.",
-                13,
-                WHITE,
-                false
-        );
-
-        message.setGravity(Gravity.CENTER);
-
-        banner.addView(message);
-
-        content.addView(banner);
-    }
-
-    // ------------------------------------------------
-    // STORAGE GAUGE
-    // ------------------------------------------------
-
-    private void addStorageCard() {
-
-        LinearLayout storage = card();
-
-        storage.addView(
-                makeText(
-                        "INTERNAL STORAGE",
-                        13,
-                        MUTED,
-                        true
-                )
-        );
-
-        addSpace(storage, 8);
+            private void addCompactStorageCard() {
+        LinearLayout storage = horizontal();
+        storage.setPadding(dp(10), dp(7), dp(10), dp(7));
+        storage.setBackground(panelBackground(CARD, 17));
 
         long total = 0;
         long available = 0;
@@ -528,10 +403,8 @@ public class MainActivity extends Activity {
             StatFs stat = new StatFs(
                     Environment.getDataDirectory().getPath()
             );
-
             total = stat.getTotalBytes();
             available = stat.getAvailableBytes();
-
         } catch (Exception ignored) {
         }
 
@@ -542,568 +415,276 @@ public class MainActivity extends Activity {
                 used,
                 total,
                 GREEN,
-                CARD_LIGHT,
+                CARD_ALT,
                 WHITE,
                 MUTED
         );
 
-        LinearLayout gaugeContainer = horizontal();
-        gaugeContainer.setGravity(Gravity.CENTER);
+        storage.addView(gauge, lp(dp(104), dp(104)));
+        hgap(storage, 10);
 
-        gaugeContainer.addView(
-                gauge,
-                params(dp(170), dp(170))
-        );
+        LinearLayout stats = vertical();
+        stats.addView(text("INTERNAL STORAGE", 10, MUTED, true));
+        gap(stats, 5);
 
-        storage.addView(gaugeContainer);
+        int percent = total > 0
+                ? (int) Math.min(100, used * 100L / total)
+                : 0;
 
-        addSpace(storage, 12);
-
-        LinearLayout stats = horizontal();
-
-        LinearLayout usedColumn = vertical();
-        usedColumn.setGravity(Gravity.CENTER);
-
-        usedColumn.addView(
-                makeText(
-                        formatSize(used),
-                        17,
-                        WHITE,
-                        true
-                )
-        );
-
-        usedColumn.addView(
-                makeText(
-                        "USED",
-                        10,
-                        MUTED,
-                        true
-                )
-        );
-
-        LinearLayout freeColumn = vertical();
-        freeColumn.setGravity(Gravity.CENTER);
-
-        freeColumn.addView(
-                makeText(
-                        formatSize(available),
-                        17,
-                        GREEN,
-                        true
-                )
-        );
-
-        freeColumn.addView(
-                makeText(
-                        "AVAILABLE",
-                        10,
-                        MUTED,
-                        true
-                )
-        );
-
-        stats.addView(
-                usedColumn,
-                new LinearLayout.LayoutParams(
-                        0,
-                        -2,
-                        1
-                )
-        );
-
-        stats.addView(
-                freeColumn,
-                new LinearLayout.LayoutParams(
-                        0,
-                        -2,
-                        1
-                )
-        );
-
-        storage.addView(stats);
-
-        addSpace(storage, 10);
-
-        TextView note = makeText(
-                "Storage information reported by Android",
-                10,
+        stats.addView(text(percent + "% USED", 18, GREEN, true));
+        gap(stats, 4);
+        stats.addView(text(formatSize(used) + " used", 12, WHITE, true));
+        stats.addView(text(
+                formatSize(available) + " available",
+                11,
                 MUTED,
                 false
+        ));
+        gap(stats, 3);
+        stats.addView(text("Reported by Android", 8, MUTED, false));
+
+        storage.addView(
+                stats,
+                new LinearLayout.LayoutParams(0, -2, 1)
         );
 
-        note.setGravity(Gravity.CENTER);
-
-        storage.addView(note);
-
-        content.addView(storage);
+        page.addView(storage);
     }
 
-    // ------------------------------------------------
-    // SHARE APP
-    // ------------------------------------------------
+    private void addPowerButton(
+            LinearLayout parent,
+            String label,
+            Runnable action
+    ) {
+        Button b = button(label, false);
+        b.setTextSize(9);
+        b.setMinHeight(dp(38));
 
-    private void shareApp() {
-
-        String message =
-                "Check out DroidTidy — Phone Cleaner & Storage Manager.\n\n"
-                + "Project and download updates:\n"
-                + "https://github.com/thabisokhutlane26-oss/CleanMate";
-
-        Intent intent = new Intent(Intent.ACTION_SEND);
-
-        intent.setType("text/plain");
-
-        intent.putExtra(
-                Intent.EXTRA_SUBJECT,
-                "DroidTidy"
+        parent.addView(
+                b,
+                new LinearLayout.LayoutParams(0, dp(40), 1)
         );
 
-        intent.putExtra(
-                Intent.EXTRA_TEXT,
-                message
-        );
-
-        startActivity(
-                Intent.createChooser(
-                        intent,
-                        "Share DroidTidy"
-                )
-        );
+        b.setOnClickListener(v -> action.run());
     }
 
-    // ------------------------------------------------
-    // SCAN CARD
-    // ------------------------------------------------
-
-    private void addScanCard() {
-
-        LinearLayout scanCard = card();
-
-        scanCard.setGravity(Gravity.CENTER);
-
-        scanCard.addView(
-                makeText(
-                        "SMART PHONE SCAN",
-                        13,
-                        MUTED,
-                        true
-                )
-        );
-
-        addSpace(scanCard, 12);
-
-        TextView cleaningSymbols =
-                makeText(
-                        "🧹     ✨     ♻️",
-                        29,
-                        GREEN,
-                        true
-                );
-
-        cleaningSymbols.setGravity(Gravity.CENTER);
-
-        scanCard.addView(cleaningSymbols);
-
-        addSpace(scanCard, 12);
-
-        scanButton = new Button(this);
-
-        scanButton.setText("SCAN");
-        scanButton.setTextSize(21);
-
-        scanButton.setTypeface(
-                Typeface.DEFAULT,
-                Typeface.BOLD
-        );
-
-        scanButton.setTextColor(
-                Color.rgb(7, 27, 18)
-        );
-
-        scanButton.setAllCaps(false);
-
-        scanButton.setBackground(
-                shape(GREEN, 100)
-        );
-
-        scanCard.addView(
-                scanButton,
-                params(dp(132), dp(132))
-        );
-
-        addSpace(scanCard, 12);
-
-        scanCard.addView(
-                makeText(
-                        "Find files taking up space",
-                        13,
-                        MUTED,
-                        false
-                )
-        );
-
-        scanButton.setOnClickListener(
-                v -> startScan()
-        );
-
-        content.addView(scanCard);
-    }
-
-    // ------------------------------------------------
-    // CLEANING TOOLS
-    // ------------------------------------------------
-
-    private void addTools() {
-
+    private void addCompactTools() {
         String[][] tools = {
-                {"📸", "Duplicate photos", "DUPLICATES"},
-                {"🖼", "Similar photos", "SIMILAR"},
+                {"📸", "Duplicates", "DUPLICATES"},
+                {"🖼", "Similar", "SIMILAR"},
                 {"📅", "Old photos", "OLD"},
                 {"📦", "Large files", "LARGE"},
-                {"📱", "Screenshots", "SCREENSHOTS"},
-                {"🎬", "Videos", "VIDEOS"},
-                {"🎵", "Audio files", "AUDIO"},
-                {"🎙", "WhatsApp voice notes", "WHATSAPP_AUDIO"},
-                {"🖼", "All photos", "PHOTOS"}
+                {"▣", "Screenshots", "SCREENSHOTS"},
+                {"▶", "Videos", "VIDEOS"},
+                {"♫", "Audio", "AUDIO"},
+                {"🎙", "WhatsApp audio", "WHATSAPP_AUDIO"},
+                {"▧", "All photos", "PHOTOS"}
         };
 
         if (listMode) {
+            for (String[] item : tools) {
+                LinearLayout row = horizontal();
+                row.setPadding(dp(8), dp(4), dp(8), dp(4));
+                row.setBackground(panelBackground(CARD, 10));
 
-            for (String[] tool : tools) {
-                addToolRow(
-                        tool[0],
-                        tool[1],
-                        tool[2]
+                row.addView(text(item[0], 16, GREEN, true));
+                hgap(row, 8);
+
+                row.addView(
+                        text(item[1], 10, WHITE, true),
+                        new LinearLayout.LayoutParams(0, -2, 1)
                 );
+
+                row.addView(text("›", 18, MUTED, true));
+
+                LinearLayout.LayoutParams rlp = lp(-1, dp(30));
+                rlp.setMargins(0, dp(1), 0, dp(1));
+                page.addView(row, rlp);
+
+                row.setOnClickListener(v -> openCategory(item[2]));
             }
-
-        } else {
-
-            GridLayout grid =
-                    new GridLayout(this);
-
-            grid.setColumnCount(2);
-            grid.setUseDefaultMargins(false);
-
-            for (String[] tool : tools) {
-
-                LinearLayout tile = vertical();
-
-                tile.setGravity(
-                        Gravity.CENTER_VERTICAL
-                );
-
-                tile.setPadding(
-                        dp(14),
-                        dp(14),
-                        dp(10),
-                        dp(14)
-                );
-
-                tile.setBackground(
-                        shape(CARD, 16)
-                );
-
-                tile.addView(
-                        makeText(
-                                tool[0],
-                                24,
-                                WHITE,
-                                false
-                        )
-                );
-
-                addSpace(tile, 8);
-
-                tile.addView(
-                        makeText(
-                                tool[1],
-                                13,
-                                WHITE,
-                                true
-                        )
-                );
-
-                GridLayout.LayoutParams gp =
-                        new GridLayout.LayoutParams();
-
-                gp.width = 0;
-                gp.height = dp(108);
-
-                gp.columnSpec =
-                        GridLayout.spec(
-                                GridLayout.UNDEFINED,
-                                1f
-                        );
-
-                gp.setMargins(
-                        dp(4),
-                        dp(4),
-                        dp(4),
-                        dp(4)
-                );
-
-                grid.addView(tile, gp);
-
-                tile.setOnClickListener(
-                        v -> openCategory(tool[2])
-                );
-            }
-
-            content.addView(grid);
+            return;
         }
+
+        GridLayout grid = new GridLayout(this);
+        grid.setColumnCount(3);
+        grid.setUseDefaultMargins(false);
+
+        for (String[] item : tools) {
+            LinearLayout tile = vertical();
+            tile.setGravity(Gravity.CENTER);
+            tile.setPadding(dp(3), dp(3), dp(3), dp(3));
+            tile.setBackground(panelBackground(CARD, 12));
+
+            TextView icon = text(item[0], 17, GREEN, true);
+            icon.setGravity(Gravity.CENTER);
+            tile.addView(icon);
+
+            TextView label = text(item[1], 8.5f, WHITE, true);
+            label.setGravity(Gravity.CENTER);
+            label.setMaxLines(1);
+            label.setEllipsize(
+                    android.text.TextUtils.TruncateAt.END
+            );
+            tile.addView(label);
+
+            GridLayout.LayoutParams gp =
+                    new GridLayout.LayoutParams();
+
+            gp.width = 0;
+            gp.height = dp(47);
+            gp.columnSpec = GridLayout.spec(
+                    GridLayout.UNDEFINED,
+                    1f
+            );
+            gp.setMargins(dp(2), dp(2), dp(2), dp(2));
+
+            grid.addView(tile, gp);
+            tile.setOnClickListener(v -> openCategory(item[2]));
+        }
+
+        page.addView(grid);
     }
 
-    private void addToolRow(
-            String icon,
-            String name,
-            String category) {
-
-        LinearLayout row = horizontal();
-
-        row.setPadding(
-                dp(14),
-                dp(13),
-                dp(14),
-                dp(13)
+    private void shareApp() {
+        Intent i = new Intent(Intent.ACTION_SEND);
+        i.setType("text/plain");
+        i.putExtra(Intent.EXTRA_SUBJECT, "DroidTidy");
+        i.putExtra(
+                Intent.EXTRA_TEXT,
+                "Check out DroidTidy — Phone Cleaner & Storage Manager.\n"
+                        + "https://github.com/thabisokhutlane26-oss/CleanMate"
         );
 
-        row.setBackground(
-                shape(CARD, 14)
-        );
-
-        row.addView(
-                makeText(
-                        icon,
-                        23,
-                        WHITE,
-                        false
-                )
-        );
-
-        addHorizontalSpace(row, 14);
-
-        row.addView(
-                makeText(
-                        name,
-                        14,
-                        WHITE,
-                        true
-                ),
-                new LinearLayout.LayoutParams(
-                        0,
-                        -2,
-                        1
-                )
-        );
-
-        row.addView(
-                makeText(
-                        "›",
-                        25,
-                        MUTED,
-                        false
-                )
-        );
-
-        LinearLayout.LayoutParams lp =
-                params(-1, dp(62));
-
-        lp.setMargins(
-                0,
-                dp(4),
-                0,
-                dp(4)
-        );
-
-        content.addView(row, lp);
-
-        row.setOnClickListener(
-                v -> openCategory(category)
+        startActivity(
+                Intent.createChooser(i, "Share DroidTidy")
         );
     }
 
     // ------------------------------------------------
-    // PERMISSIONS
+    // MEDIA PERMISSIONS AND SCANNING
     // ------------------------------------------------
 
-    private boolean hasPermission(String permission) {
-
-        return Build.VERSION.SDK_INT < 23 ||
-                checkSelfPermission(permission) ==
-                        PackageManager.PERMISSION_GRANTED;
+    private boolean granted(String permission) {
+        return Build.VERSION.SDK_INT < 23
+                || checkSelfPermission(permission)
+                == PackageManager.PERMISSION_GRANTED;
     }
 
-    private boolean hasAnyMediaPermission() {
-
+    private boolean hasMediaAccess() {
         if (Build.VERSION.SDK_INT < 33) {
-            return hasPermission(
+            return granted(
                     Manifest.permission.READ_EXTERNAL_STORAGE
             );
         }
 
-        boolean images = hasPermission(
-                Manifest.permission.READ_MEDIA_IMAGES
-        );
-
-        boolean videos = hasPermission(
-                Manifest.permission.READ_MEDIA_VIDEO
-        );
-
-        boolean audio = hasPermission(
-                Manifest.permission.READ_MEDIA_AUDIO
-        );
-
-        boolean selected =
-                Build.VERSION.SDK_INT >= 34 &&
-                hasPermission(
+        return granted(Manifest.permission.READ_MEDIA_IMAGES)
+                || granted(Manifest.permission.READ_MEDIA_VIDEO)
+                || granted(Manifest.permission.READ_MEDIA_AUDIO)
+                || (Build.VERSION.SDK_INT >= 34
+                && granted(
                         Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED
-                );
-
-        return images || videos || audio || selected;
+                ));
     }
 
     private void startScan() {
-
-        if (!hasAnyMediaPermission()) {
-            requestStoragePermissions();
+        if (!hasMediaAccess()) {
+            if (Build.VERSION.SDK_INT >= 34) {
+                requestPermissions(
+                        new String[]{
+                                Manifest.permission.READ_MEDIA_IMAGES,
+                                Manifest.permission.READ_MEDIA_VIDEO,
+                                Manifest.permission.READ_MEDIA_AUDIO,
+                                Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED
+                        },
+                        REQUEST_MEDIA
+                );
+            } else if (Build.VERSION.SDK_INT >= 33) {
+                requestPermissions(
+                        new String[]{
+                                Manifest.permission.READ_MEDIA_IMAGES,
+                                Manifest.permission.READ_MEDIA_VIDEO,
+                                Manifest.permission.READ_MEDIA_AUDIO
+                        },
+                        REQUEST_MEDIA
+                );
+            } else {
+                requestPermissions(
+                        new String[]{
+                                Manifest.permission.READ_EXTERNAL_STORAGE
+                        },
+                        REQUEST_MEDIA
+                );
+            }
             return;
         }
 
         runScan();
     }
 
-    private void requestStoragePermissions() {
-
-        if (Build.VERSION.SDK_INT >= 34) {
-
-            requestPermissions(
-                    new String[] {
-                            Manifest.permission.READ_MEDIA_IMAGES,
-                            Manifest.permission.READ_MEDIA_VIDEO,
-                            Manifest.permission.READ_MEDIA_AUDIO,
-                            Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED
-                    },
-                    REQUEST_STORAGE
-            );
-
-        } else if (Build.VERSION.SDK_INT >= 33) {
-
-            requestPermissions(
-                    new String[] {
-                            Manifest.permission.READ_MEDIA_IMAGES,
-                            Manifest.permission.READ_MEDIA_VIDEO,
-                            Manifest.permission.READ_MEDIA_AUDIO
-                    },
-                    REQUEST_STORAGE
-            );
-
-        } else {
-
-            requestPermissions(
-                    new String[] {
-                            Manifest.permission.READ_EXTERNAL_STORAGE
-                    },
-                    REQUEST_STORAGE
-            );
-        }
-    }
-
     @Override
     public void onRequestPermissionsResult(
             int requestCode,
             String[] permissions,
-            int[] grantResults) {
-
+            int[] results
+    ) {
         super.onRequestPermissionsResult(
                 requestCode,
                 permissions,
-                grantResults
+                results
         );
 
-        if (requestCode == REQUEST_STORAGE) {
-
-            if (hasAnyMediaPermission()) {
+        if (requestCode == REQUEST_MEDIA) {
+            if (hasMediaAccess()) {
                 runScan();
-
             } else {
-
                 Toast.makeText(
                         this,
-                        "Allow media access to scan your phone.",
+                        "Allow media access to scan your files.",
                         Toast.LENGTH_LONG
                 ).show();
             }
         }
     }
 
-    // ------------------------------------------------
-    // SCANNING
-    // ------------------------------------------------
-
     private void runScan() {
-
-        scanCompleted = false;
-
         if (scanButton != null) {
             scanButton.setEnabled(false);
-            scanButton.setText("...");
+            scanButton.setText("SCANNING");
         }
 
-        if (status != null) {
-            status.setText(
-                    "Scanning your accessible files..."
-            );
+        if (scanSummary != null) {
+            scanSummary.setText("Scanning accessible media…");
         }
-
-        Toast.makeText(
-                this,
-                "Scanning phone media...",
-                Toast.LENGTH_SHORT
-        ).show();
 
         executor.execute(() -> {
-
-            List<FileInfo> found =
-                    new ArrayList<>();
+            List<FileInfo> found = new ArrayList<>();
 
             try {
-
                 if (Build.VERSION.SDK_INT < 33) {
-
                     scanCollection(
                             MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
                             "IMAGE",
                             found
                     );
-
                     scanCollection(
                             MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
                             "VIDEO",
                             found
                     );
-
                     scanCollection(
                             MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
                             "AUDIO",
                             found
                     );
-
                 } else {
+                    boolean selected = Build.VERSION.SDK_INT >= 34
+                            && granted(
+                            Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED
+                    );
 
-                    boolean selected =
-                            Build.VERSION.SDK_INT >= 34 &&
-                            hasPermission(
-                                    Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED
-                            );
-
-                    if (
-                            hasPermission(
-                                    Manifest.permission.READ_MEDIA_IMAGES
-                            ) || selected
-                    ) {
-
+                    if (granted(Manifest.permission.READ_MEDIA_IMAGES)
+                            || selected) {
                         scanCollection(
                                 MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
                                 "IMAGE",
@@ -1111,12 +692,8 @@ public class MainActivity extends Activity {
                         );
                     }
 
-                    if (
-                            hasPermission(
-                                    Manifest.permission.READ_MEDIA_VIDEO
-                            ) || selected
-                    ) {
-
+                    if (granted(Manifest.permission.READ_MEDIA_VIDEO)
+                            || selected) {
                         scanCollection(
                                 MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
                                 "VIDEO",
@@ -1124,12 +701,7 @@ public class MainActivity extends Activity {
                         );
                     }
 
-                    if (
-                            hasPermission(
-                                    Manifest.permission.READ_MEDIA_AUDIO
-                            )
-                    ) {
-
+                    if (granted(Manifest.permission.READ_MEDIA_AUDIO)) {
                         scanCollection(
                                 MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
                                 "AUDIO",
@@ -1140,37 +712,35 @@ public class MainActivity extends Activity {
 
                 allFiles.clear();
                 allFiles.addAll(found);
-
                 scanCompleted = true;
 
                 handler.post(() -> {
+                    showDashboard();
 
-                    showHome();
+                    if (scanSummary != null) {
+                        scanSummary.setText(
+                                "Scan complete · "
+                                        + allFiles.size()
+                                        + " accessible files"
+                        );
+                    }
 
-                    scanSummary.setText(
-                            "Scan complete. Found " +
-                            allFiles.size() +
-                            " accessible media files. Choose a tool below to review them."
-                    );
-
-                    status.setText(
-                            "Scan completed successfully."
-                    );
+                    if (dashboardStatus != null) {
+                        dashboardStatus.setText(
+                                "Scan completed successfully."
+                        );
+                    }
 
                     Toast.makeText(
                             this,
-                            "Scan completed: " +
-                                    allFiles.size() +
-                                    " files",
+                            "Scan complete: " + allFiles.size() + " files",
                             Toast.LENGTH_LONG
                     ).show();
                 });
 
             } catch (Exception e) {
-
                 handler.post(() -> {
-
-                    showHome();
+                    showDashboard();
 
                     Toast.makeText(
                             this,
@@ -1185,23 +755,20 @@ public class MainActivity extends Activity {
     private void scanCollection(
             Uri collection,
             String type,
-            List<FileInfo> output) {
-
+            List<FileInfo> output
+    ) {
         String[] projection;
 
         if (Build.VERSION.SDK_INT >= 29) {
-
-            projection = new String[] {
+            projection = new String[]{
                     MediaStore.MediaColumns._ID,
                     MediaStore.MediaColumns.DISPLAY_NAME,
                     MediaStore.MediaColumns.SIZE,
                     MediaStore.MediaColumns.DATE_MODIFIED,
                     MediaStore.MediaColumns.RELATIVE_PATH
             };
-
         } else {
-
-            projection = new String[] {
+            projection = new String[]{
                     MediaStore.MediaColumns._ID,
                     MediaStore.MediaColumns.DISPLAY_NAME,
                     MediaStore.MediaColumns.SIZE,
@@ -1209,591 +776,348 @@ public class MainActivity extends Activity {
             };
         }
 
-        try (
-                Cursor cursor =
-                        getContentResolver().query(
-                                collection,
-                                projection,
-                                null,
-                                null,
-                                null
-                        )
-        ) {
+        try (Cursor c = getContentResolver().query(
+                collection,
+                projection,
+                null,
+                null,
+                null
+        )) {
+            if (c == null) return;
 
-            if (cursor == null) return;
+            int idCol = c.getColumnIndex(MediaStore.MediaColumns._ID);
+            int nameCol = c.getColumnIndex(
+                    MediaStore.MediaColumns.DISPLAY_NAME
+            );
+            int sizeCol = c.getColumnIndex(MediaStore.MediaColumns.SIZE);
+            int dateCol = c.getColumnIndex(
+                    MediaStore.MediaColumns.DATE_MODIFIED
+            );
+            int pathCol = c.getColumnIndex(
+                    MediaStore.MediaColumns.RELATIVE_PATH
+            );
 
-            int idColumn =
-                    cursor.getColumnIndex(
-                            MediaStore.MediaColumns._ID
-                    );
+            while (c.moveToNext()) {
+                long id = c.getLong(idCol);
 
-            int nameColumn =
-                    cursor.getColumnIndex(
-                            MediaStore.MediaColumns.DISPLAY_NAME
-                    );
-
-            int sizeColumn =
-                    cursor.getColumnIndex(
-                            MediaStore.MediaColumns.SIZE
-                    );
-
-            int dateColumn =
-                    cursor.getColumnIndex(
-                            MediaStore.MediaColumns.DATE_MODIFIED
-                    );
-
-            int pathColumn =
-                    cursor.getColumnIndex(
-                            MediaStore.MediaColumns.RELATIVE_PATH
-                    );
-
-            while (cursor.moveToNext()) {
-
-                long id = cursor.getLong(idColumn);
-
-                String name = nameColumn >= 0
-                        ? cursor.getString(nameColumn)
+                String name = nameCol >= 0
+                        ? c.getString(nameCol)
                         : "Unknown file";
 
-                long size = sizeColumn >= 0
-                        ? cursor.getLong(sizeColumn)
+                long size = sizeCol >= 0
+                        ? Math.max(0, c.getLong(sizeCol))
                         : 0;
 
-                long date = dateColumn >= 0
-                        ? cursor.getLong(dateColumn)
+                long date = dateCol >= 0
+                        ? c.getLong(dateCol)
                         : 0;
 
-                String folder = pathColumn >= 0
-                        ? cursor.getString(pathColumn)
+                String folder = pathCol >= 0
+                        ? c.getString(pathCol)
                         : "";
 
-                if (size < 0) {
-                    size = 0;
-                }
+                Uri uri = Uri.withAppendedPath(
+                        collection,
+                        String.valueOf(id)
+                );
 
-                Uri fileUri =
-                        Uri.withAppendedPath(
-                                collection,
-                                String.valueOf(id)
-                        );
-
-                FileInfo file =
+                output.add(
                         new FileInfo(
                                 name,
                                 size,
                                 date,
                                 type,
-                                fileUri,
+                                uri,
                                 folder
-                        );
-
-                output.add(file);
+                        )
+                );
             }
         }
     }
 
-    // ------------------------------------------------
-    // CATEGORY FILTERING
-    // ------------------------------------------------
-
-    private void openCategory(String category) {
-
+          private void openCategory(String category) {
         if (!scanCompleted) {
-
             Toast.makeText(
                     this,
-                    "Please scan your phone first.",
+                    "Run a scan first.",
                     Toast.LENGTH_SHORT
             ).show();
-
             return;
         }
 
-        stopAudio();
-
         currentCategory = category;
-
         visibleFiles.clear();
 
-        long oldLimit =
-                System.currentTimeMillis() / 1000L -
-                        OLD_FILE_AGE;
+        long oldLimit = System.currentTimeMillis() / 1000L
+                - OLD_FILE_AGE;
 
-        Map<Long, Integer> sizeCounts =
-                new HashMap<>();
+        Map<Long, Integer> counts = new HashMap<>();
 
-        for (FileInfo file : allFiles) {
-
-            if ("IMAGE".equals(file.type)) {
-
-                sizeCounts.put(
-                        file.size,
-                        sizeCounts.containsKey(file.size)
-                                ? sizeCounts.get(file.size) + 1
+        for (FileInfo f : allFiles) {
+            if ("IMAGE".equals(f.type)) {
+                counts.put(
+                        f.size,
+                        counts.containsKey(f.size)
+                                ? counts.get(f.size) + 1
                                 : 1
                 );
             }
         }
 
-        for (FileInfo file : allFiles) {
-
+        for (FileInfo f : allFiles) {
             boolean include = false;
 
             switch (category) {
-
                 case "PHOTOS":
-
-                    include =
-                            "IMAGE".equals(file.type);
-
+                    include = "IMAGE".equals(f.type);
                     break;
 
                 case "VIDEOS":
-
-                    include =
-                            "VIDEO".equals(file.type);
-
+                    include = "VIDEO".equals(f.type);
                     break;
 
                 case "AUDIO":
-
-                    include =
-                            "AUDIO".equals(file.type);
-
+                    include = "AUDIO".equals(f.type);
                     break;
 
                 case "WHATSAPP_AUDIO":
+                    String folder = f.folder.toLowerCase(Locale.US);
+                    String name = f.name.toLowerCase(Locale.US);
 
-                    String folder =
-                            file.folder.toLowerCase(Locale.US);
-
-                    String audioName =
-                            file.name.toLowerCase(Locale.US);
-
-                    include =
-                            "AUDIO".equals(file.type) &&
-                            (
-                                    folder.contains("whatsapp") ||
-                                    audioName.contains("ptt") ||
-                                    audioName.contains("whatsapp")
-                            );
-
+                    include = "AUDIO".equals(f.type)
+                            && (folder.contains("whatsapp")
+                            || name.contains("ptt")
+                            || name.contains("whatsapp"));
                     break;
 
                 case "LARGE":
-
-                    include =
-                            file.size >= LARGE_FILE_SIZE;
-
+                    include = f.size >= LARGE_FILE_SIZE;
                     break;
 
                 case "OLD":
-
-                    include =
-                            "IMAGE".equals(file.type) &&
-                            file.dateModified > 0 &&
-                            file.dateModified < oldLimit;
-
+                    include = "IMAGE".equals(f.type)
+                            && f.dateModified > 0
+                            && f.dateModified < oldLimit;
                     break;
 
                 case "SCREENSHOTS":
+                    String n = f.name.toLowerCase(Locale.US);
+                    String p = f.folder.toLowerCase(Locale.US);
 
-                    String lower =
-                            file.name.toLowerCase(Locale.US);
-
-                    String lowerFolder =
-                            file.folder.toLowerCase(Locale.US);
-
-                    include =
-                            "IMAGE".equals(file.type) &&
-                            (
-                                    lower.contains("screenshot") ||
-                                    lower.contains("screen_shot") ||
-                                    lower.contains("screen-shot") ||
-                                    lowerFolder.contains("screenshot")
-                            );
-
+                    include = "IMAGE".equals(f.type)
+                            && (n.contains("screenshot")
+                            || n.contains("screen_shot")
+                            || n.contains("screen-shot")
+                            || p.contains("screenshot"));
                     break;
 
                 case "DUPLICATES":
                 case "SIMILAR":
-
-                    include =
-                            "IMAGE".equals(file.type) &&
-                            sizeCounts.get(file.size) != null &&
-                            sizeCounts.get(file.size) > 1;
-
+                    include = "IMAGE".equals(f.type)
+                            && counts.get(f.size) != null
+                            && counts.get(f.size) > 1;
                     break;
             }
 
             if (include) {
-                visibleFiles.add(file);
+                visibleFiles.add(f);
             }
         }
+
+        Collections.sort(
+                visibleFiles,
+                (a, b) -> Long.compare(b.size, a.size)
+        );
 
         showFileCategory(category);
     }
 
-    // ------------------------------------------------
-    // FILE CATEGORY SCREEN
-    // ------------------------------------------------
-
     private void showFileCategory(String category) {
+        currentScreen = "FILES";
+        setPage(true);
+        addHeader(false);
 
-        stopAudio();
+        gap(page, 10);
+        page.addView(text(
+                categoryTitle(category),
+                20,
+                WHITE,
+                true
+        ));
 
-        content.removeAllViews();
+        gap(page, 5);
+        page.addView(text(
+                visibleFiles.size() + " files · review before deleting",
+                11,
+                MUTED,
+                false
+        ));
 
-        LinearLayout top = horizontal();
-
-        Button back = styledButton("‹ Back");
-
-        top.addView(back);
-
-        top.addView(
-                makeText(
-                        categoryTitle(category),
-                        18,
-                        WHITE,
-                        true
-                ),
-                new LinearLayout.LayoutParams(
-                        0, -2, 1
-                )
-        );
-
-        content.addView(top);
-
-        back.setOnClickListener(
-                v -> showHome()
-        );
-
-        addSpace(content, 16);
-
-        LinearLayout info = card();
-
-        info.addView(
-                makeText(
-                        visibleFiles.size() + " files found",
-                        19,
-                        WHITE,
-                        true
-                )
-        );
-
-        addSpace(info, 5);
-
-        info.addView(
-                makeText(
-                        "Preview and review files before choosing what to remove.",
-                        12,
-                        MUTED,
-                        false
-                )
-        );
-
-        content.addView(info);
-
-        addSpace(content, 12);
+        gap(page, 10);
 
         LinearLayout actions = horizontal();
 
-        Button selectAll =
-                styledButton("Select all");
-
-        Button delete =
-                styledButton("Delete selected");
+        Button select = button("Select all", false);
+        Button delete = button("Delete selected", true);
 
         actions.addView(
-                selectAll,
-                new LinearLayout.LayoutParams(
-                        0,
-                        dp(48),
-                        1
-                )
+                select,
+                new LinearLayout.LayoutParams(0, dp(42), 1)
         );
 
-        addHorizontalSpace(actions, 8);
+        hgap(actions, 7);
 
         actions.addView(
                 delete,
-                new LinearLayout.LayoutParams(
-                        0,
-                        dp(48),
-                        1
-                )
+                new LinearLayout.LayoutParams(0, dp(42), 1)
         );
 
-        content.addView(actions);
+        page.addView(actions);
 
-        selectAll.setOnClickListener(v -> {
+        select.setOnClickListener(v -> {
+            boolean all = true;
 
-            boolean allSelected = true;
-
-            for (FileInfo file : visibleFiles) {
-                if (!file.selected) {
-                    allSelected = false;
+            for (FileInfo f : visibleFiles) {
+                if (!f.selected) {
+                    all = false;
                     break;
                 }
             }
 
-            for (FileInfo file : visibleFiles) {
-                file.selected = !allSelected;
+            for (FileInfo f : visibleFiles) {
+                f.selected = !all;
             }
 
             showFileCategory(category);
         });
 
-        delete.setOnClickListener(
-                v -> deleteSelected()
-        );
+        delete.setOnClickListener(v -> deleteSelected());
 
-        addSpace(content, 12);
+        gap(page, 9);
 
         if (visibleFiles.isEmpty()) {
-
             LinearLayout empty = card();
 
-            empty.addView(
-                    makeText(
-                            "Nothing found here",
-                            18,
-                            WHITE,
-                            true
-                    )
-            );
+            empty.addView(text(
+                    "Nothing found here",
+                    17,
+                    WHITE,
+                    true
+            ));
 
-            addSpace(empty, 8);
+            gap(empty, 5);
 
-            String message;
+            empty.addView(text(
+                    category.equals("DUPLICATES")
+                            || category.equals("SIMILAR")
+                            ? "No same-size candidates were found. Same size does not prove identical content."
+                            : "No matching accessible files were found.",
+                    12,
+                    MUTED,
+                    false
+            ));
 
-            if (category.equals("DUPLICATES")) {
-
-                message =
-                        "No same-size duplicate candidates were found.";
-
-            } else if (category.equals("WHATSAPP_AUDIO")) {
-
-                message =
-                        "No matching WhatsApp audio files were found in the accessible audio collection. Some WhatsApp voice notes may not be indexed by Android.";
-
-            } else {
-
-                message =
-                        "There are no matching accessible files in this category.";
-            }
-
-            empty.addView(
-                    makeText(
-                            message,
-                            13,
-                            MUTED,
-                            false
-                    )
-            );
-
-            content.addView(empty);
-
+            page.addView(empty);
             return;
         }
 
-        if (
-                category.equals("SIMILAR") ||
-                category.equals("DUPLICATES")
-        ) {
+        if ("DUPLICATES".equals(category)
+                || "SIMILAR".equals(category)) {
 
-            TextView note = makeText(
-                    "These are same-size candidates. File size alone does not prove two photos are identical. Compare them before deleting.",
-                    12,
+            TextView note = text(
+                    "Candidates are grouped by file size, not image content. Compare each file before deleting.",
+                    10,
                     MUTED,
                     false
             );
 
-            note.setPadding(
-                    dp(4),
-                    dp(4),
-                    dp(4),
-                    dp(12)
-            );
-
-            content.addView(note);
+            page.addView(note);
+            gap(page, 6);
         }
 
-        if (category.equals("WHATSAPP_AUDIO")) {
-
-            TextView note = makeText(
-                    "Only WhatsApp-related audio indexed by Android is shown here. Additional folder access can be added separately.",
-                    12,
-                    MUTED,
-                    false
-            );
-
-            note.setPadding(
-                    dp(4),
-                    dp(4),
-                    dp(4),
-                    dp(12)
-            );
-
-            content.addView(note);
-        }
-
-        for (FileInfo file : visibleFiles) {
-            addFileRow(file);
+        for (FileInfo f : visibleFiles) {
+            addFileRow(f);
         }
     }
 
-    // ------------------------------------------------
-    // PHOTO PREVIEW AND AUDIO CONTROLS
-    // ------------------------------------------------
-
-    private void addFileRow(FileInfo file) {
-
+    private void addFileRow(FileInfo f) {
         LinearLayout row = horizontal();
-
-        row.setPadding(
-                dp(10),
-                dp(10),
-                dp(10),
-                dp(10)
-        );
-
-        row.setBackground(
-                shape(CARD, 13)
-        );
+        row.setPadding(dp(8), dp(7), dp(8), dp(7));
+        row.setBackground(panelBackground(CARD, 12));
 
         CheckBox check = new CheckBox(this);
-
         check.setButtonTintList(
                 ColorStateList.valueOf(GREEN)
         );
-
-        check.setChecked(file.selected);
-
+        check.setChecked(f.selected);
         check.setOnCheckedChangeListener(
-                (button, checked) ->
-                        file.selected = checked
+                (b, checked) -> f.selected = checked
         );
 
         row.addView(check);
 
-        if ("IMAGE".equals(file.type)) {
+        if ("IMAGE".equals(f.type)) {
+            ImageView image = new ImageView(this);
+            image.setScaleType(ImageView.ScaleType.CENTER_CROP);
+            image.setImageURI(f.uri);
 
-            ImageView thumbnail =
-                    new ImageView(this);
+            LinearLayout.LayoutParams ilp =
+                    lp(dp(58), dp(58));
 
-            LinearLayout.LayoutParams imageParams =
-                    params(dp(76), dp(76));
+            ilp.setMargins(0, 0, dp(8), 0);
+            row.addView(image, ilp);
 
-            imageParams.setMargins(
-                    0,
-                    0,
-                    dp(12),
-                    0
-            );
-
-            thumbnail.setScaleType(
-                    ImageView.ScaleType.CENTER_CROP
-            );
-
-            thumbnail.setBackground(
-                    shape(CARD_LIGHT, 10)
-            );
-
-            thumbnail.setImageURI(file.uri);
-
-            row.addView(
-                    thumbnail,
-                    imageParams
-            );
-
-            thumbnail.setOnClickListener(
-                    v -> openImage(file)
-            );
+            image.setOnClickListener(v -> openImage(f));
         }
 
         LinearLayout details = vertical();
 
-        TextView name = makeText(
-                file.name,
-                13,
+        TextView name = text(
+                f.name,
+                12,
                 WHITE,
                 true
         );
 
         name.setMaxLines(2);
+        name.setEllipsize(
+                android.text.TextUtils.TruncateAt.END
+        );
 
         details.addView(name);
 
-        addSpace(details, 4);
-
-        details.addView(
-                makeText(
-                        formatSize(file.size) +
-                                "  •  " + file.type,
-                        11,
-                        MUTED,
-                        false
-                )
-        );
+        details.addView(text(
+                formatSize(f.size) + "  •  " + f.type,
+                10,
+                MUTED,
+                false
+        ));
 
         row.addView(
                 details,
-                new LinearLayout.LayoutParams(
-                        0,
-                        -2,
-                        1
-                )
+                new LinearLayout.LayoutParams(0, -2, 1)
         );
 
-        if ("AUDIO".equals(file.type)) {
+        if ("AUDIO".equals(f.type)) {
+            Button play = button("▶", false);
+            row.addView(play, lp(dp(48), dp(40)));
 
-            Button play =
-                    styledButton("▶");
-
-            row.addView(
-                    play,
-                    params(dp(52), dp(44))
-            );
-
-            play.setOnClickListener(
-                    v -> playAudio(file, play)
-            );
+            play.setOnClickListener(v -> playAudio(f, play));
         }
 
-        LinearLayout.LayoutParams lp =
-                params(-1, -2);
+        LinearLayout.LayoutParams rlp = lp(-1, -2);
+        rlp.setMargins(0, dp(2), 0, dp(2));
 
-        lp.setMargins(
-                0,
-                dp(3),
-                0,
-                dp(3)
-        );
-
-        content.addView(row, lp);
+        page.addView(row, rlp);
     }
 
-    private void openImage(FileInfo file) {
-
+    private void openImage(FileInfo f) {
         try {
-
-            Intent intent =
-                    new Intent(Intent.ACTION_VIEW);
-
-            intent.setDataAndType(
-                    file.uri,
-                    "image/*"
-            );
-
-            intent.addFlags(
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION
-            );
-
-            startActivity(intent);
-
+            Intent i = new Intent(Intent.ACTION_VIEW);
+            i.setDataAndType(f.uri, "image/*");
+            i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            startActivity(i);
         } catch (Exception e) {
-
             Toast.makeText(
                     this,
                     "No photo viewer is available.",
@@ -1802,78 +1126,54 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void playAudio(
-            FileInfo file,
-            Button button) {
-
+    private void playAudio(FileInfo f, Button b) {
         try {
-
-            if (
-                    mediaPlayer != null &&
-                    currentlyPlayingButton == button
-            ) {
-
+            if (mediaPlayer != null && playingButton == b) {
                 if (mediaPlayer.isPlaying()) {
-
                     mediaPlayer.pause();
-                    button.setText("▶");
-
+                    b.setText("▶");
                 } else {
-
                     mediaPlayer.start();
-                    button.setText("Ⅱ");
+                    b.setText("Ⅱ");
                 }
-
                 return;
             }
 
             stopAudio();
 
-            mediaPlayer =
-                    MediaPlayer.create(
-                            this,
-                            file.uri
-                    );
+            mediaPlayer = MediaPlayer.create(this, f.uri);
 
             if (mediaPlayer == null) {
-
                 Toast.makeText(
                         this,
                         "This audio format cannot be played.",
-                        Toast.LENGTH_LONG
+                        Toast.LENGTH_SHORT
                 ).show();
-
                 return;
             }
 
-            currentlyPlayingButton = button;
+            playingButton = b;
 
             mediaPlayer.setOnCompletionListener(
-                    player -> {
-                        stopAudio();
-                    }
+                    mp -> stopAudio()
             );
 
             mediaPlayer.start();
-
-            button.setText("Ⅱ");
+            b.setText("Ⅱ");
 
         } catch (Exception e) {
-
             stopAudio();
 
             Toast.makeText(
                     this,
                     "Unable to play this audio file.",
-                    Toast.LENGTH_LONG
+                    Toast.LENGTH_SHORT
             ).show();
         }
     }
 
     private void stopAudio() {
-
         if (mediaPlayer != null) {
-
             try {
                 mediaPlayer.stop();
             } catch (Exception ignored) {
@@ -1883,89 +1183,36 @@ public class MainActivity extends Activity {
             mediaPlayer = null;
         }
 
-        if (currentlyPlayingButton != null) {
-
-            currentlyPlayingButton.setText("▶");
-
-            currentlyPlayingButton = null;
+        if (playingButton != null) {
+            playingButton.setText("▶");
+            playingButton = null;
         }
     }
-
-    // ------------------------------------------------
-    // CATEGORY NAMES
-    // ------------------------------------------------
-
-    private String categoryTitle(String category) {
-
-        switch (category) {
-
-            case "DUPLICATES":
-                return "Duplicate candidates";
-
-            case "SIMILAR":
-                return "Similar photo candidates";
-
-            case "OLD":
-                return "Old photos";
-
-            case "LARGE":
-                return "Large files";
-
-            case "SCREENSHOTS":
-                return "Screenshots";
-
-            case "VIDEOS":
-                return "Videos";
-
-            case "AUDIO":
-                return "Audio files";
-
-            case "WHATSAPP_AUDIO":
-                return "WhatsApp voice notes";
-
-            case "PHOTOS":
-                return "All photos";
-
-            default:
-                return "Files";
-        }
-    }
-
-    // ------------------------------------------------
-    // SAFE DELETION
-    // ------------------------------------------------
 
     private void deleteSelected() {
+        ArrayList<Uri> uris = new ArrayList<>();
 
-        ArrayList<Uri> selectedUris =
-                new ArrayList<>();
-
-        for (FileInfo file : visibleFiles) {
-
-            if (file.selected) {
-                selectedUris.add(file.uri);
+        for (FileInfo f : visibleFiles) {
+            if (f.selected) {
+                uris.add(f.uri);
             }
         }
 
-        if (selectedUris.isEmpty()) {
-
+        if (uris.isEmpty()) {
             Toast.makeText(
                     this,
-                    "Select at least one file first.",
+                    "Select files first.",
                     Toast.LENGTH_SHORT
             ).show();
-
             return;
         }
 
         if (Build.VERSION.SDK_INT >= 30) {
-
             try {
-
                 PendingIntent request =
                         MediaStore.createDeleteRequest(
                                 getContentResolver(),
-                                selectedUris
+                                uris
                         );
 
                 startIntentSenderForResult(
@@ -1978,19 +1225,16 @@ public class MainActivity extends Activity {
                 );
 
             } catch (Exception e) {
-
                 Toast.makeText(
                         this,
                         "Could not open Android deletion confirmation.",
                         Toast.LENGTH_LONG
                 ).show();
             }
-
         } else {
-
             Toast.makeText(
                     this,
-                    "Safe system deletion requires Android 11 or newer in this version.",
+                    "This safe multi-file deletion flow requires Android 11 or newer.",
                     Toast.LENGTH_LONG
             ).show();
         }
@@ -2000,8 +1244,8 @@ public class MainActivity extends Activity {
     protected void onActivityResult(
             int requestCode,
             int resultCode,
-            Intent data) {
-
+            Intent data
+    ) {
         super.onActivityResult(
                 requestCode,
                 resultCode,
@@ -2009,36 +1253,778 @@ public class MainActivity extends Activity {
         );
 
         if (requestCode == REQUEST_DELETE) {
-
             if (resultCode == RESULT_OK) {
-
                 Toast.makeText(
                         this,
-                        "Android confirmed the deletion request.",
-                        Toast.LENGTH_LONG
+                        "Android accepted the deletion request.",
+                        Toast.LENGTH_SHORT
                 ).show();
 
-                runScan();
-
+                scanCompleted = false;
+                startScan();
             } else {
-
                 Toast.makeText(
                         this,
                         "Deletion cancelled.",
                         Toast.LENGTH_SHORT
                 ).show();
             }
+
+        } else if (requestCode == REQUEST_USAGE) {
+            showAppStorage();
+
+        } else if (requestCode == REQUEST_UNINSTALL) {
+            uninstallIndex++;
+            launchNextUninstall();
+        }
+    }
+
+    private String categoryTitle(String category) {
+        switch (category) {
+            case "DUPLICATES":
+                return "Duplicate photo candidates";
+            case "SIMILAR":
+                return "Similar photo candidates";
+            case "OLD":
+                return "Old photos";
+            case "LARGE":
+                return "Large files";
+            case "SCREENSHOTS":
+                return "Screenshots";
+            case "VIDEOS":
+                return "Videos";
+            case "AUDIO":
+                return "Audio files";
+            case "WHATSAPP_AUDIO":
+                return "WhatsApp voice notes";
+            case "PHOTOS":
+                return "All photos";
+            default:
+                return "Files";
+        }
+    }
+   
+                // ------------------------------------------------
+    // APP STORAGE MANAGER
+    // ------------------------------------------------
+
+    private boolean hasUsageAccess() {
+        try {
+            AppOpsManager appOps =
+                    (AppOpsManager) getSystemService(
+                            Context.APP_OPS_SERVICE
+                    );
+
+            int mode;
+
+            if (Build.VERSION.SDK_INT >= 29) {
+                mode = appOps.unsafeCheckOpNoThrow(
+                        AppOpsManager.OPSTR_GET_USAGE_STATS,
+                        android.os.Process.myUid(),
+                        getPackageName()
+                );
+            } else {
+                mode = appOps.checkOpNoThrow(
+                        AppOpsManager.OPSTR_GET_USAGE_STATS,
+                        android.os.Process.myUid(),
+                        getPackageName()
+                );
+            }
+
+            return mode == AppOpsManager.MODE_ALLOWED;
+
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private void requestUsageAccess() {
+        try {
+            startActivityForResult(
+                    new Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS),
+                    REQUEST_USAGE
+            );
+
+        } catch (Exception e) {
+            Toast.makeText(
+                    this,
+                    "Open Settings > Special app access > Usage access for DroidTidy.",
+                    Toast.LENGTH_LONG
+            ).show();
+        }
+    }
+
+    private void showAppStorage() {
+        currentScreen = "APPS";
+        setPage(true);
+        addHeader(false);
+
+        gap(page, 10);
+
+        page.addView(text(
+                "APP STORAGE MANAGER",
+                19,
+                WHITE,
+                true
+        ));
+
+        gap(page, 4);
+
+        page.addView(text(
+                "Review installed apps and choose what you no longer need.",
+                11,
+                MUTED,
+                false
+        ));
+
+        gap(page, 8);
+
+        if (!hasUsageAccess()) {
+            LinearLayout access = card();
+
+            access.addView(text(
+                    "Enable Usage Access",
+                    15,
+                    GREEN,
+                    true
+            ));
+
+            gap(access, 5);
+
+            access.addView(text(
+                    "Android requires your permission to show when apps were last used. App sizes may also require this access.",
+                    11,
+                    MUTED,
+                    false
+            ));
+
+            gap(access, 8);
+
+            Button grant = button(
+                    "Open Usage Access settings",
+                    true
+            );
+
+            access.addView(grant);
+            grant.setOnClickListener(v -> requestUsageAccess());
+
+            page.addView(access);
+        }
+
+        LinearLayout summary = horizontal();
+
+        summary.addView(
+                text(
+                        installedApps.size() + " apps loaded",
+                        11,
+                        WHITE,
+                        true
+                ),
+                new LinearLayout.LayoutParams(0, -2, 1)
+        );
+
+        Button refresh = button("↻ Refresh", false);
+        summary.addView(refresh);
+        page.addView(summary);
+
+        refresh.setOnClickListener(v -> loadInstalledApps());
+
+        gap(page, 8);
+
+        LinearLayout controls = horizontal();
+
+        Button selectAll = button("Select all", false);
+        Button uninstall = button("Uninstall selected", true);
+
+        controls.addView(
+                selectAll,
+                new LinearLayout.LayoutParams(0, dp(42), 1)
+        );
+
+        hgap(controls, 6);
+
+        controls.addView(
+                uninstall,
+                new LinearLayout.LayoutParams(0, dp(42), 1)
+        );
+
+        page.addView(controls);
+
+        selectAll.setOnClickListener(v -> {
+            boolean all = true;
+
+            for (AppInfo a : installedApps) {
+                if (!a.selected) {
+                    all = false;
+                    break;
+                }
+            }
+
+            for (AppInfo a : installedApps) {
+                a.selected = !all;
+            }
+
+            renderAppRows();
+        });
+
+        uninstall.setOnClickListener(v -> beginUninstall());
+
+        gap(page, 8);
+
+        LinearLayout sortRow = horizontal();
+
+        sortRow.addView(text("SORT", 9, MUTED, true));
+        hgap(sortRow, 8);
+
+        Button bySize = button("Largest first", false);
+        Button byName = button("Name A–Z", false);
+
+        sortRow.addView(bySize);
+        hgap(sortRow, 5);
+        sortRow.addView(byName);
+        page.addView(sortRow);
+
+        bySize.setOnClickListener(v -> {
+            Collections.sort(
+                    installedApps,
+                    (a, b) -> Long.compare(
+                            b.sizeBytes,
+                            a.sizeBytes
+                    )
+            );
+
+            renderAppRows();
+        });
+
+        byName.setOnClickListener(v -> {
+            Collections.sort(
+                    installedApps,
+                    (a, b) -> a.label.compareToIgnoreCase(b.label)
+            );
+
+            renderAppRows();
+        });
+
+        LinearLayout list = vertical();
+        list.setTag("app_list");
+        page.addView(list);
+
+        if (installedApps.isEmpty()) {
+            list.addView(text(
+                    "Loading installed apps…",
+                    12,
+                    MUTED,
+                    false
+            ));
+
+            loadInstalledApps();
+
+        } else {
+            renderAppRows();
+        }
+    }
+
+    private void loadInstalledApps() {
+        executor.execute(() -> {
+            List<AppInfo> result = new ArrayList<>();
+            Map<String, Long> lastUsed = getLastUsedMap();
+            PackageManager pm = getPackageManager();
+
+            try {
+                List<ApplicationInfo> apps =
+                        pm.getInstalledApplications(
+                                PackageManager.GET_META_DATA
+                        );
+
+                for (ApplicationInfo ai : apps) {
+                    if (ai.packageName.equals(getPackageName())) {
+                        continue;
+                    }
+
+                    Intent launch =
+                            pm.getLaunchIntentForPackage(ai.packageName);
+
+                    if (launch == null) {
+                        continue;
+                    }
+
+                    String label;
+
+                    try {
+                        label = pm.getApplicationLabel(ai).toString();
+                    } catch (Exception e) {
+                        label = ai.packageName;
+                    }
+
+                    long size = queryAppSize(ai.packageName);
+
+                    long used = lastUsed.containsKey(ai.packageName)
+                            ? lastUsed.get(ai.packageName)
+                            : 0L;
+
+                    result.add(
+                            new AppInfo(
+                                    label,
+                                    ai.packageName,
+                                    size,
+                                    used
+                            )
+                    );
+                }
+
+            } catch (Exception ignored) {
+            }
+
+            Collections.sort(
+                    result,
+                    (a, b) -> Long.compare(
+                            b.sizeBytes,
+                            a.sizeBytes
+                    )
+            );
+
+            handler.post(() -> {
+                installedApps.clear();
+                installedApps.addAll(result);
+
+                if (currentScreen.equals("APPS")) {
+                    showAppStorage();
+                }
+            });
+        });
+    }
+
+    private Map<String, Long> getLastUsedMap() {
+        Map<String, Long> map = new HashMap<>();
+
+        if (!hasUsageAccess()) {
+            return map;
+        }
+
+        try {
+            UsageStatsManager manager =
+                    (UsageStatsManager) getSystemService(
+                            USAGE_STATS_SERVICE
+                    );
+
+            long end = System.currentTimeMillis();
+
+            long start = end
+                    - 365L * 24L * 60L * 60L * 1000L;
+
+            List<UsageStats> stats =
+                    manager.queryUsageStats(
+                            UsageStatsManager.INTERVAL_DAILY,
+                            start,
+                            end
+                    );
+
+            if (stats != null) {
+                for (UsageStats s : stats) {
+                    long previous = map.containsKey(s.getPackageName())
+                            ? map.get(s.getPackageName())
+                            : 0L;
+
+                    if (s.getLastTimeUsed() > previous) {
+                        map.put(
+                                s.getPackageName(),
+                                s.getLastTimeUsed()
+                        );
+                    }
+                }
+            }
+
+        } catch (Exception ignored) {
+        }
+
+        return map;
+    }
+
+    private long queryAppSize(String packageName) {
+        if (Build.VERSION.SDK_INT < 26 || !hasUsageAccess()) {
+            return -1L;
+        }
+
+        try {
+            StorageStatsManager manager =
+                    (StorageStatsManager) getSystemService(
+                            Context.STORAGE_STATS_SERVICE
+                    );
+
+            StorageStats stats =
+                    manager.queryStatsForPackage(
+                            StorageManager.UUID_DEFAULT,
+                            packageName,
+                            UserHandle.myUserId()
+                    );
+
+            return stats.getAppBytes()
+                    + stats.getDataBytes()
+                    + stats.getCacheBytes();
+
+        } catch (Exception e) {
+            return -1L;
+        }
+    }
+
+    private void renderAppRows() {
+        if (!currentScreen.equals("APPS")) {
+            return;
+        }
+
+        LinearLayout list = findAppList(page);
+
+        if (list == null) {
+            return;
+        }
+
+        list.removeAllViews();
+
+        for (AppInfo app : installedApps) {
+            LinearLayout row = horizontal();
+
+            row.setPadding(
+                    dp(8),
+                    dp(8),
+                    dp(8),
+                    dp(8)
+            );
+
+            row.setBackground(panelBackground(CARD, 12));
+
+            CheckBox cb = new CheckBox(this);
+            cb.setButtonTintList(
+                    ColorStateList.valueOf(GREEN)
+            );
+            cb.setChecked(app.selected);
+
+            cb.setOnCheckedChangeListener(
+                    (b, checked) -> app.selected = checked
+            );
+
+            row.addView(cb);
+
+            LinearLayout details = vertical();
+
+            details.addView(text(
+                    app.label,
+                    12,
+                    WHITE,
+                    true
+            ));
+
+            details.addView(text(
+                    app.packageName,
+                    8,
+                    MUTED,
+                    false
+            ));
+
+            String size = app.sizeBytes >= 0
+                    ? formatSize(app.sizeBytes)
+                    : "Size unavailable";
+
+            String last = app.lastUsed > 0
+                    ? "Last used " + relativeTime(app.lastUsed)
+                    : (hasUsageAccess()
+                    ? "Never used in available history"
+                    : "Last-used access not granted");
+
+            details.addView(text(
+                    size + "  •  " + last,
+                    9,
+                    MUTED,
+                    false
+            ));
+
+            row.addView(
+                    details,
+                    new LinearLayout.LayoutParams(0, -2, 1)
+            );
+
+            Button uninstall = button("Remove", false);
+            uninstall.setTextSize(9);
+
+            row.addView(
+                    uninstall,
+                    lp(dp(60), dp(36))
+            );
+
+            uninstall.setOnClickListener(v -> {
+                uninstallQueue.clear();
+                uninstallQueue.add(app.packageName);
+                uninstallIndex = 0;
+                launchNextUninstall();
+            });
+
+            LinearLayout.LayoutParams rlp = lp(-1, -2);
+            rlp.setMargins(0, dp(2), 0, dp(2));
+
+            list.addView(row, rlp);
+        }
+    }
+
+    private LinearLayout findAppList(ViewGroup group) {
+        for (int i = 0; i < group.getChildCount(); i++) {
+            View child = group.getChildAt(i);
+
+            if (child instanceof LinearLayout
+                    && "app_list".equals(child.getTag())) {
+                return (LinearLayout) child;
+            }
+
+            if (child instanceof ViewGroup) {
+                LinearLayout found =
+                        findAppList((ViewGroup) child);
+
+                if (found != null) {
+                    return found;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private void beginUninstall() {
+        uninstallQueue.clear();
+
+        for (AppInfo app : installedApps) {
+            if (app.selected) {
+                uninstallQueue.add(app.packageName);
+            }
+        }
+
+        if (uninstallQueue.isEmpty()) {
+            Toast.makeText(
+                    this,
+                    "Select at least one app.",
+                    Toast.LENGTH_SHORT
+            ).show();
+            return;
+        }
+
+        uninstallIndex = 0;
+
+        Toast.makeText(
+                this,
+                "Android will ask you to confirm each uninstall separately.",
+                Toast.LENGTH_LONG
+        ).show();
+
+        launchNextUninstall();
+    }
+
+    private void launchNextUninstall() {
+        if (uninstallIndex >= uninstallQueue.size()) {
+            uninstallQueue.clear();
+            loadInstalledApps();
+            return;
+        }
+
+        String packageName =
+                uninstallQueue.get(uninstallIndex);
+
+        try {
+            Intent i = new Intent(
+                    Intent.ACTION_DELETE,
+                    Uri.parse("package:" + packageName)
+            );
+
+            startActivityForResult(
+                    i,
+                    REQUEST_UNINSTALL
+            );
+
+        } catch (Exception e) {
+            uninstallIndex++;
+            launchNextUninstall();
         }
     }
 
     // ------------------------------------------------
-    // FILE SIZE
+    // APP LOCKER
     // ------------------------------------------------
 
+    private void showAppLocker() {
+        currentScreen = "LOCKER";
+        setPage(true);
+        addHeader(false);
+
+        gap(page, 12);
+
+        page.addView(text(
+                "APP LOCKER",
+                20,
+                WHITE,
+                true
+        ));
+
+        gap(page, 8);
+
+        LinearLayout info = card();
+
+        info.addView(text(
+                "Protect DroidTidy with a private PIN",
+                15,
+                GREEN,
+                true
+        ));
+
+        gap(info, 7);
+
+        info.addView(text(
+                "Android does not let an ordinary app silently lock other apps. This built-in lock protects DroidTidy itself when you reopen it.",
+                11,
+                MUTED,
+                false
+        ));
+
+        gap(info, 12);
+
+        EditText pin = new EditText(this);
+        pin.setSingleLine(true);
+        pin.setInputType(2 | 0x1000);
+        pin.setHint("Create a 4–8 digit PIN");
+        pin.setHintTextColor(MUTED);
+        pin.setTextColor(WHITE);
+        pin.setPadding(
+                dp(12),
+                dp(8),
+                dp(12),
+                dp(8)
+        );
+        pin.setBackground(solidBackground(CARD_ALT, 12));
+
+        info.addView(pin, lp(-1, dp(48)));
+        gap(info, 8);
+
+        Button save = button("Save PIN", true);
+        info.addView(save);
+
+        save.setOnClickListener(v -> {
+            String value = pin.getText().toString().trim();
+
+            if (value.length() < 4
+                    || value.length() > 8
+                    || !value.matches("[0-9]+")) {
+
+                Toast.makeText(
+                        this,
+                        "Enter a PIN with 4 to 8 digits.",
+                        Toast.LENGTH_SHORT
+                ).show();
+
+                return;
+            }
+
+            getSharedPreferences(
+                    "droidtidy_lock",
+                    MODE_PRIVATE
+            ).edit().putString("pin", value).apply();
+
+            Toast.makeText(
+                    this,
+                    "DroidTidy PIN saved.",
+                    Toast.LENGTH_SHORT
+            ).show();
+
+            pin.setText("");
+        });
+
+        Button remove = button(
+                "Remove DroidTidy PIN",
+                false
+        );
+
+        info.addView(remove);
+
+        remove.setOnClickListener(v -> {
+            getSharedPreferences(
+                    "droidtidy_lock",
+                    MODE_PRIVATE
+            ).edit().remove("pin").apply();
+
+            Toast.makeText(
+                    this,
+                    "PIN removed.",
+                    Toast.LENGTH_SHORT
+            ).show();
+        });
+
+        page.addView(info);
+    }
+
+    // ------------------------------------------------
+    // BATTERY SETTINGS
+    // ------------------------------------------------
+
+    private void openBatterySettings() {
+        Intent i = new Intent(
+                Settings.ACTION_BATTERY_SAVER_SETTINGS
+        );
+
+        if (i.resolveActivity(getPackageManager()) == null) {
+            i = new Intent(
+                    Settings.ACTION_POWER_USAGE_SUMMARY
+            );
+        }
+
+        try {
+            startActivity(i);
+
+        } catch (Exception e) {
+            Toast.makeText(
+                    this,
+                    "Battery settings are not available on this device.",
+                    Toast.LENGTH_SHORT
+            ).show();
+        }
+    }
+
+    // ------------------------------------------------
+    // HELPERS
+    // ------------------------------------------------
+
+    private String relativeTime(long timestamp) {
+        long diff = Math.max(
+                0,
+                System.currentTimeMillis() - timestamp
+        );
+
+        long days = diff / (24L * 60L * 60L * 1000L);
+
+        if (days == 0) {
+            return "today";
+        }
+
+        if (days == 1) {
+            return "yesterday";
+        }
+
+        if (days < 30) {
+            return days + " days ago";
+        }
+
+        long months = days / 30;
+
+        if (months < 12) {
+            return months
+                    + (months == 1 ? " month ago" : " months ago");
+        }
+
+        long years = days / 365;
+
+        return years
+                + (years == 1 ? " year ago" : " years ago");
+    }
+
     private String formatSize(long bytes) {
+        if (bytes < 0) {
+            return "Unavailable";
+        }
 
         if (bytes >= 1024L * 1024L * 1024L) {
-
             return String.format(
                     Locale.US,
                     "%.2f GB",
@@ -2047,24 +2033,22 @@ public class MainActivity extends Activity {
         }
 
         if (bytes >= 1024L * 1024L) {
-
             return String.format(
                     Locale.US,
-                    "%.2f MB",
+                    "%.1f MB",
                     bytes / (1024.0 * 1024.0)
             );
         }
 
         if (bytes >= 1024L) {
-
             return String.format(
                     Locale.US,
-                    "%.2f KB",
+                    "%.1f KB",
                     bytes / 1024.0
             );
         }
 
-        return bytes + " bytes";
+        return bytes + " B";
     }
 
     // ------------------------------------------------
@@ -2072,7 +2056,6 @@ public class MainActivity extends Activity {
     // ------------------------------------------------
 
     private static class FileInfo {
-
         String name;
         long size;
         long dateModified;
@@ -2080,7 +2063,7 @@ public class MainActivity extends Activity {
         Uri uri;
         String folder;
 
-        boolean selected = false;
+        boolean selected;
 
         FileInfo(
                 String name,
@@ -2088,16 +2071,38 @@ public class MainActivity extends Activity {
                 long dateModified,
                 String type,
                 Uri uri,
-                String folder) {
-
+                String folder
+        ) {
             this.name = name;
             this.size = size;
             this.dateModified = dateModified;
             this.type = type;
             this.uri = uri;
+            this.folder = folder == null ? "" : folder;
+        }
+    }
 
-            this.folder =
-                    folder == null ? "" : folder;
+    // ------------------------------------------------
+    // APP MODEL
+    // ------------------------------------------------
+
+    private static class AppInfo {
+        String label;
+        String packageName;
+        long sizeBytes;
+        long lastUsed;
+        boolean selected;
+
+        AppInfo(
+                String label,
+                String packageName,
+                long sizeBytes,
+                long lastUsed
+        ) {
+            this.label = label;
+            this.packageName = packageName;
+            this.sizeBytes = sizeBytes;
+            this.lastUsed = lastUsed;
         }
     }
 
@@ -2107,11 +2112,8 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
-
         stopAudio();
-
         executor.shutdownNow();
-
         super.onDestroy();
     }
 }
